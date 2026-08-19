@@ -151,6 +151,68 @@ class SenseVoiceSpeechEngineTest {
     }
 
     @Test
+    fun closeFromCallerDispatcherDoesNotDeadlockBlockedFinishSession() = runTest {
+        val decodeEntered = CountDownLatch(1)
+        val allowDecode = CountDownLatch(1)
+        val callerDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "finish-caller").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "finish-native").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val native = FakeOfflineRecognizer(
+            onDecode = {
+                decodeEntered.countDown()
+                check(allowDecode.await(2, TimeUnit.SECONDS))
+            }
+        )
+        val engine = testEngine(
+            native = native,
+            dispatcher = nativeDispatcher,
+            closeDispatcher = nativeDispatcher::close
+        )
+        val callerScope = CoroutineScope(SupervisorJob() + callerDispatcher)
+        val finishReturned = CountDownLatch(1)
+        val closeEntered = CountDownLatch(1)
+        val closeReturned = CountDownLatch(1)
+
+        try {
+            engine.startSession {}
+            val finish = callerScope.async {
+                try {
+                    engine.finishSession()
+                } finally {
+                    finishReturned.countDown()
+                }
+            }
+            assertTrue(decodeEntered.await(2, TimeUnit.SECONDS))
+            val close = callerScope.async {
+                closeEntered.countDown()
+                try {
+                    engine.close()
+                } finally {
+                    closeReturned.countDown()
+                }
+            }
+            assertTrue(closeEntered.await(2, TimeUnit.SECONDS))
+
+            allowDecode.countDown()
+
+            assertTrue(finishReturned.await(1, TimeUnit.SECONDS))
+            assertTrue(closeReturned.await(1, TimeUnit.SECONDS))
+            assertEquals("", withTimeout(1_000) { finish.await() })
+            withTimeout(1_000) { close.await() }
+            assertEquals(1, native.stream.releaseCalls)
+            assertEquals(1, native.releaseCalls)
+        } finally {
+            allowDecode.countDown()
+            callerScope.cancel()
+            callerDispatcher.close()
+            nativeDispatcher.close()
+        }
+    }
+
+    @Test
     fun secondActiveSessionIsRejected() = runTest {
         val native = FakeOfflineRecognizer()
         val engine = testEngine(native)
@@ -228,7 +290,8 @@ class SenseVoiceSpeechEngineTest {
     private class FakeOfflineRecognizer(
         private val result: String = "",
         var decodeFailure: Throwable? = null,
-        private val onStreamCreated: (FakeOfflineStream) -> Unit = {}
+        private val onStreamCreated: (FakeOfflineStream) -> Unit = {},
+        private val onDecode: () -> Unit = {}
     ) : SenseVoiceRecognizerApi {
         val streams = mutableListOf<FakeOfflineStream>()
         val stream: FakeOfflineStream get() = streams.single()
@@ -245,6 +308,7 @@ class SenseVoiceSpeechEngineTest {
         override fun decode(stream: SenseVoiceStreamApi) {
             requireOwned(stream)
             operationThreads += Thread.currentThread().name
+            onDecode()
             decodeCalls++
             decodeFailure?.let { throw it }
         }

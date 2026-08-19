@@ -66,6 +66,7 @@ class SenseVoiceSpeechEngine internal constructor(
     private var closeFailure: Throwable? = null
     private var recognizer: SenseVoiceRecognizerApi? = null
     private var activeSession: ActiveSession? = null
+    private var finishingSession: ActiveSession? = null
 
     override suspend fun prepare() {
         stateMutex.withLock {
@@ -109,22 +110,30 @@ class SenseVoiceSpeechEngine internal constructor(
         }
     }
 
-    override suspend fun finishSession(): String = stateMutex.withLock {
-        ensureOpen()
-        val session = requireActiveSession()
-        var primaryFailure: Throwable? = null
-        try {
-            withContext(dispatcher + NonCancellable) {
-                session.recognizer.decode(session.stream)
-                session.recognizer.resultText(session.stream).trim()
+    override suspend fun finishSession(): String {
+        val session = stateMutex.withLock {
+            ensureOpen()
+            requireActiveSession().also {
+                activeSession = null
+                finishingSession = it
             }
-        } catch (failure: Throwable) {
-            primaryFailure = failure
-            throw failure
+        }
+        try {
+            return withContext(dispatcher + NonCancellable) {
+                var primaryFailure: Throwable? = null
+                try {
+                    session.recognizer.decode(session.stream)
+                    session.recognizer.resultText(session.stream).trim()
+                } catch (failure: Throwable) {
+                    primaryFailure = failure
+                    throw failure
+                } finally {
+                    releaseSessionPreservingFailure(session, primaryFailure)
+                }
+            }
         } finally {
-            if (activeSession === session) activeSession = null
-            withContext(dispatcher + NonCancellable) {
-                releasePreservingFailure(session.stream::release, primaryFailure)
+            stateMutex.withLock {
+                if (finishingSession === session) finishingSession = null
             }
         }
     }
@@ -228,15 +237,16 @@ class SenseVoiceSpeechEngine internal constructor(
     }
 
     private suspend fun releaseNativeResourcesLocked() {
-        val session = activeSession
+        val sessions = listOfNotNull(activeSession, finishingSession)
         val preparedRecognizer = recognizer
         activeSession = null
+        finishingSession = null
         recognizer = null
 
         withContext(dispatcher + NonCancellable) {
             var failure: Throwable? = null
             listOfNotNull(
-                session?.stream?.let { it::release },
+                *sessions.map { session -> { releaseSessionPreservingFailure(session, null) } }.toTypedArray(),
                 preparedRecognizer?.let { it::release }
             ).forEach { release ->
                 try {
@@ -261,6 +271,12 @@ class SenseVoiceSpeechEngine internal constructor(
         }
     }
 
+    private fun releaseSessionPreservingFailure(session: ActiveSession, primaryFailure: Throwable?) {
+        if (session.releaseStarted.compareAndSet(false, true)) {
+            releasePreservingFailure(session.stream::release, primaryFailure)
+        }
+    }
+
     private class OwnedSpeechDispatcher {
         private val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "sherpa-onnx-speech").apply { isDaemon = true }
@@ -274,7 +290,8 @@ class SenseVoiceSpeechEngine internal constructor(
 
     private data class ActiveSession(
         val recognizer: SenseVoiceRecognizerApi,
-        val stream: SenseVoiceStreamApi
+        val stream: SenseVoiceStreamApi,
+        val releaseStarted: AtomicBoolean = AtomicBoolean(false)
     )
 
     private companion object {

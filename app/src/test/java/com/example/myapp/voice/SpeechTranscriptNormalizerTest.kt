@@ -63,7 +63,7 @@ class SpeechTranscriptNormalizerTest {
     @Test
     fun collapsesStreamingDecoderCharacterRepetitions() {
         assertEquals(
-            "把二号机的一级灵敏度调整到九十七",
+            "把二号机的一级灵敏度杜调整到九十七",
             SpeechTranscriptNormalizer.normalize("把二二号机的一级灵敏敏敏敏度杜调整整到九十七")
         )
         assertEquals(
@@ -102,11 +102,7 @@ class SpeechTranscriptNormalizerTest {
     }
 
     @Test
-    fun repairsObservedEnhancedInferenceDecoderNoise() {
-        assertEquals(
-            "关闭 强化推理",
-            SpeechTranscriptNormalizer.normalize("关闭币避强化推理推理")
-        )
+    fun insertsBooleanBoundaryWithoutLexicalRepair() {
         assertEquals(
             "关闭 强化推理",
             SpeechTranscriptNormalizer.normalize("关闭强化推理")

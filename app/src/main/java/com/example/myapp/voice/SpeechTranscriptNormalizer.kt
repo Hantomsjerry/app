@@ -12,7 +12,7 @@ object SpeechTranscriptNormalizer {
     private val spokenLevel = Regex("""(?i)\blevel\s+(one|two|three)\b""")
     private val chineseNumberRun = Regex("[零〇一二两三四五六七八九十百千万]+")
     private val enhancedInferenceBooleanBoundary = Regex(
-        """(开启|打开|关闭)(?=强化推理|增强推理|增强推断)"""
+        """(开启|打开|关闭)(?=强化推理|增强推理|增强推断|enhancedInference)"""
     )
     private val leadingVivoWakePhrase = Regex(
         """(?i)^\s*(?:(?:hi|hey)\s+jovi(?![a-z0-9_])[\s,，。:：;；!?！？-]*)+"""
@@ -22,17 +22,11 @@ object SpeechTranscriptNormalizer {
         "一" to "1", "二" to "2", "三" to "3"
     )
 
-    fun normalize(text: String): String {
+    fun normalize(text: String): String = normalizeDeterministic(normalizeFormatting(text))
+
+    internal fun normalizeFormatting(text: String): String {
         val withoutWakePhrase = leadingVivoWakePhrase.replace(text, "")
-        val collapsed = insertEnhancedInferenceBooleanBoundary(
-            collapseRepeatedChineseNumberPhrases(
-                repairObservedDomainDecoderNoise(
-                    collapseRepeatedCjkCharacters(withoutWakePhrase)
-                )
-            )
-        )
-            .replace("灵敏度杜", "灵敏度")
-        val machines = spokenMachine.replace(collapsed) { match ->
+        val machines = spokenMachine.replace(withoutWakePhrase) { match ->
             "machine_${levels.getValue(match.groupValues[1].lowercase())}"
         }
         val levelWords = spokenLevel.replace(machines) { match ->
@@ -47,17 +41,18 @@ object SpeechTranscriptNormalizer {
         }
     }
 
+    internal fun normalizeDeterministic(text: String): String =
+        insertEnhancedInferenceBooleanBoundary(
+            collapseRepeatedChineseNumberPhrases(
+                collapseRepeatedCjkCharacters(text)
+            )
+        )
+
     private fun collapseRepeatedCjkCharacters(text: String): String = buildString(text.length) {
         text.forEach { character ->
             if (lastOrNull() != character || !isCjkUnifiedIdeograph(character)) append(character)
         }
     }
-
-    private fun repairObservedDomainDecoderNoise(text: String): String = text
-        .replace("关闭币避强化推理", "关闭强化推理")
-        .replace("强化推理推理", "强化推理")
-        .replace("增强推理推理", "增强推理")
-        .replace("增强推断推断", "增强推断")
 
     private fun insertEnhancedInferenceBooleanBoundary(text: String): String =
         enhancedInferenceBooleanBoundary.replace(text, "$1 ")

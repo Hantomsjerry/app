@@ -91,16 +91,6 @@ class VoiceIntentParserTest {
     }
 
     @Test
-    fun observedEnhancedInferenceNoiseBypassesQwenSafely() = runTest {
-        val parser = VoiceIntentParser(FailIfCalledQwenEngine())
-
-        val result = parser.parse("关闭币避强化推理推理").getOrThrow()
-
-        assertEquals(VoiceParameter.enhancedInference, result.parameter)
-        assertEquals(ParameterValue.BooleanValue(false), result.value)
-    }
-
-    @Test
     fun repeatedChineseNumberPhraseBypassesQwenAsOneValue() = runTest {
         val parser = VoiceIntentParser(FailIfCalledQwenEngine())
 

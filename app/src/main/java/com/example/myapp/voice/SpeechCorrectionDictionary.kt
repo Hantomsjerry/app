@@ -12,7 +12,8 @@ enum class CorrectionCategory {
 data class CorrectionLexeme(
     val canonical: String,
     val aliases: Set<String>,
-    val category: CorrectionCategory
+    val category: CorrectionCategory,
+    val preferredReplacement: String = canonical
 )
 
 object SpeechCorrectionDictionary {
@@ -29,53 +30,75 @@ object SpeechCorrectionDictionary {
                 "lv1Sensitivity", "Lv1 sensitivity", "level 1 sensitivity",
                 "Lv1灵敏度", "Lv1 灵敏度", "Lv1敏感度", "Lv1 敏感度", "一级灵敏度", "一级敏感度"
             ),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv1灵敏度"
         ),
         CorrectionLexeme(
             "lv1Strength",
             setOf("lv1Strength", "Lv1 strength", "level 1 strength", "Lv1强度", "Lv1 强度", "一级强度"),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv1强度"
         ),
         CorrectionLexeme(
             "lv1Density",
             setOf(
                 "lv1Density", "Lv1 density", "level 1 density", "Lv1浓淡", "Lv1 浓淡", "Lv1密度", "Lv1 密度", "一级密度"
             ),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv1浓淡"
         ),
         CorrectionLexeme(
             "enhancedInference",
-            setOf("enhancedInference", "enhanced inference", "强化推理", "增强推理", "增强推断"),
-            CorrectionCategory.PARAMETER
+            setOf(
+                "enhancedInference", "enhanced inference", "强化推理", "增强推理", "增强推断",
+                "币避强化推理"
+            ),
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "强化推理"
         ),
         CorrectionLexeme(
             "lv1AreaMask",
-            setOf("lv1AreaMask", "area mask", "区域掩码", "区域遮罩", "区域屏蔽"),
-            CorrectionCategory.PARAMETER
+            setOf("lv1AreaMask", "area mask", "Lv1面积屏蔽", "区域掩码", "区域遮罩", "区域屏蔽"),
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv1面积屏蔽"
         ),
-        CorrectionLexeme("minArea", setOf("minArea", "min area", "minimum area", "最小面积"), CorrectionCategory.PARAMETER),
-        CorrectionLexeme("template", setOf("template", "模板"), CorrectionCategory.PARAMETER),
+        CorrectionLexeme(
+            "minArea",
+            setOf("minArea", "min area", "minimum area", "最小面积"),
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "最小面积"
+        ),
+        CorrectionLexeme(
+            "template",
+            setOf("template", "模板"),
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "模板"
+        ),
         CorrectionLexeme(
             "lv2Strength",
             setOf("lv2Strength", "Lv2 strength", "level 2 strength", "Lv2强度", "Lv2 强度", "二级强度"),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv2强度"
         ),
         CorrectionLexeme(
             "lv3Strength",
             setOf("lv3Strength", "Lv3 strength", "level 3 strength", "Lv3强度", "Lv3 强度", "三级强度"),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "Lv3强度"
         ),
         CorrectionLexeme(
             "actionDuration",
-            setOf("actionDuration", "action duration", "动作持续时间", "动作时长"),
-            CorrectionCategory.PARAMETER
+            setOf("actionDuration", "action duration", "动作持续", "动作持续时间", "动作时长"),
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "动作持续"
         ),
         CorrectionLexeme(
             "rejectDelay",
             setOf(
                 "rejectDelay", "reject delay", "剔除延时", "剔除延迟", "去除延时", "去除延迟", "剔除岩石", "拒绝延迟", "拒绝等待"
             ),
-            CorrectionCategory.PARAMETER
+            CorrectionCategory.PARAMETER,
+            preferredReplacement = "剔除延时"
         )
     )
 

@@ -48,6 +48,39 @@ class SpeechCorrectionDictionaryTest {
     }
 
     @Test
+    fun exposesDeterministicPreferredReplacementSurfaces() {
+        val preferredByCanonical = SpeechCorrectionDictionary.lexemes
+            .associate { it.canonical to it.preferredReplacement }
+
+        assertEquals(
+            mapOf(
+                "lv1Sensitivity" to "Lv1灵敏度",
+                "lv1Strength" to "Lv1强度",
+                "lv1Density" to "Lv1浓淡",
+                "enhancedInference" to "强化推理",
+                "lv1AreaMask" to "Lv1面积屏蔽",
+                "minArea" to "最小面积",
+                "template" to "模板",
+                "lv2Strength" to "Lv2强度",
+                "lv3Strength" to "Lv3强度",
+                "actionDuration" to "动作持续",
+                "rejectDelay" to "剔除延时"
+            ),
+            preferredByCanonical.filterKeys { canonical ->
+                VoiceParameter.values().any { it.wireName == canonical }
+            }
+        )
+        listOf("machine_1", "machine_2", "machine_3", "Lv1", "Lv2", "Lv3").forEach { canonical ->
+            assertEquals(canonical, preferredByCanonical.getValue(canonical))
+        }
+        SpeechCorrectionDictionary.lexemes
+            .filter { it.category == CorrectionCategory.PARAMETER }
+            .forEach { lexeme ->
+                assertTrue(lexeme.aliases.contains(lexeme.preferredReplacement))
+            }
+    }
+
+    @Test
     fun accessorsReturnTheAliasesForTheirWireNames() {
         assertTrue(SpeechCorrectionDictionary.aliases(MachineDevice.machine_2).contains("machine two"))
         assertTrue(SpeechCorrectionDictionary.aliases(VoiceParameter.rejectDelay).contains("拒绝延迟"))

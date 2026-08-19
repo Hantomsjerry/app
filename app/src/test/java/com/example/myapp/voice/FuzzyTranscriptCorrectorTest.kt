@@ -39,10 +39,49 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
+    fun correctsAboveThresholdAsciiSuffixInsertion() {
+        val result = corrector.correct("action durationx 700")
+
+        assertEquals("动作持续 700", result.correctedText)
+        assertEquals(0.94f, result.replacements.single().score, 0.0001f)
+        assertEquals(CorrectionReason.EDIT_DISTANCE, result.replacements.single().reason)
+    }
+
+    @Test
+    fun correctsObservedSensitivitySuffixOutsideNormalizer() {
+        val result = corrector.correct("把一级灵敏度杜调到97")
+
+        assertEquals("把Lv1灵敏度调到97", result.correctedText)
+        assertEquals("一级灵敏度杜", result.replacements.single().source)
+        assertEquals(1.0f, result.replacements.single().score)
+        assertEquals(CorrectionReason.EXACT_ALIAS, result.replacements.single().reason)
+    }
+
+    @Test
     fun repairsRepeatedPhraseSuffixesLexically() {
         val result = corrector.correct("关闭强化推理推理")
 
         assertEquals("关闭 强化推理", result.correctedText)
+        assertEquals(CorrectionReason.REPETITION, result.replacements.single().reason)
+    }
+
+    @Test
+    fun repetitionUsesTheWeightedFormulaInsteadOfPerfectScore() {
+        val result = corrector.correct("强化推理推理")
+
+        assertEquals("强化推理", result.correctedText)
+        assertEquals(0.9f, result.replacements.single().score, 0.0001f)
+        assertEquals(0.9f, result.confidence, 0.0001f)
+        assertEquals(CorrectionReason.REPETITION, result.replacements.single().reason)
+    }
+
+    @Test
+    fun correctsTripleDeviceRepetitionAsOneAtomicSpan() {
+        val result = corrector.correct("二二二号机")
+
+        assertEquals("machine_2", result.correctedText)
+        assertEquals(1, result.replacements.size)
+        assertEquals("二二二号机", result.replacements.single().source)
         assertEquals(CorrectionReason.REPETITION, result.replacements.single().reason)
     }
 
@@ -103,6 +142,36 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
+    fun candidatesExactlyPointZeroEightApartAreNotAmbiguous() {
+        val source = "aaaaaaaaaaaaaa"
+        val nearAlias = "aaaaaaaaaaaaab"
+        val encoder = PinyinEncoder { text ->
+            when (text) {
+                source -> "aaaaaaaaaa"
+                nearAlias -> "aaaaaaaaab"
+                else -> TestPinyinEncoder.encode(text)
+            }
+        }
+        val result = correctorWithEntries(
+            lexeme("alpha", source),
+            lexeme("beta", nearAlias),
+            pinyinEncoder = encoder
+        ).correct("$source 7")
+
+        assertEquals("alpha 7", result.correctedText)
+        assertFalse(result.ambiguous)
+        assertEquals(1, result.replacements.size)
+    }
+
+    @Test
+    fun rejectsExactAsciiAliasInsideALargerToken() {
+        val result = corrector.correct("xtemplate 400")
+
+        assertEquals("xtemplate 400", result.correctedText)
+        assertTrue(result.replacements.isEmpty())
+    }
+
+    @Test
     fun globalSelectionPrefersLongerCoverageWhenScoresTie() {
         val result = correctorWithEntries(
             lexeme("short", "甲乙"),
@@ -111,6 +180,52 @@ class FuzzyTranscriptCorrectorTest {
 
         assertEquals("whole", result.correctedText)
         assertEquals(listOf("甲乙丙丁"), result.replacements.map { it.source })
+    }
+
+    @Test
+    fun globalSelectionPrefersFewerReplacementsAfterScoreAndCoverageTie() {
+        val sourceChunks = (0 until 6).map { chunkIndex ->
+            buildString {
+                append('一')
+                repeat(13) { offset -> append((0x4E10 + chunkIndex * 13 + offset).toChar()) }
+            }
+        }
+        val source = sourceChunks.joinToString("")
+        val exactBoundaries = listOf(0, 17, 34, 51, 68, source.length)
+        val exactLexemes = exactBoundaries.zipWithNext().mapIndexed { index, (start, end) ->
+            lexeme("A${index + 1}", source.substring(start, end))
+        }
+        val fuzzyAliases = sourceChunks.mapIndexed { index, chunk ->
+            chunk.toCharArray().also { characters ->
+                repeat(3) { offset -> characters[offset + 1] = (0x6000 + index * 3 + offset).toChar() }
+            }.concatToString()
+        }
+        val pinyinByText = buildMap {
+            sourceChunks.zip(fuzzyAliases).forEach { (chunk, alias) ->
+                put(chunk, "aaaaaa")
+                put(alias, "aaaaab")
+            }
+        }
+        val encoder = PinyinEncoder { text -> pinyinByText[text] ?: TestPinyinEncoder.encode(text) }
+        val fuzzyLexemes = fuzzyAliases.mapIndexed { index, alias -> lexeme("B${index + 1}", alias) }
+        val result = FuzzyTranscriptCorrector(
+            dictionary = exactLexemes + fuzzyLexemes,
+            pinyinEncoder = encoder
+        ).correct(source)
+
+        assertEquals("A1A2A3A4A5", result.correctedText)
+        assertEquals(5, result.replacements.size)
+    }
+
+    @Test
+    fun globalSelectionUsesCanonicalOrderAsFinalTieBreaker() {
+        val result = correctorWithEntries(
+            lexeme("zeta", "甲乙"),
+            lexeme("alpha", "乙丙")
+        ).correct("甲乙丙")
+
+        assertEquals("甲alpha", result.correctedText)
+        assertEquals("alpha", result.replacements.single().replacement)
     }
 
     @Test
@@ -129,9 +244,12 @@ class FuzzyTranscriptCorrectorTest {
         assertTrue(DeterministicVoiceParser.parse(result.correctedText) is DirectParseResult.Rejected)
     }
 
-    private fun correctorWithEntries(vararg entries: CorrectionLexeme) = FuzzyTranscriptCorrector(
+    private fun correctorWithEntries(
+        vararg entries: CorrectionLexeme,
+        pinyinEncoder: PinyinEncoder = TestPinyinEncoder
+    ) = FuzzyTranscriptCorrector(
         dictionary = entries.toList(),
-        pinyinEncoder = TestPinyinEncoder
+        pinyinEncoder = pinyinEncoder
     )
 
     private fun lexeme(canonical: String, vararg aliases: String) = CorrectionLexeme(

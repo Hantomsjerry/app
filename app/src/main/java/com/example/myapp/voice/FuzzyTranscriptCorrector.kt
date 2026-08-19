@@ -1,5 +1,6 @@
 package com.example.myapp.voice
 
+import java.util.ArrayDeque
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -64,7 +65,10 @@ class FuzzyTranscriptCorrector(
         for (start in text.indices) {
             for (endExclusive in start + 1..text.length) {
                 val source = text.substring(start, endExclusive)
-                if (!hasMatchableEdges(source) || !hasSafeAsciiBoundaries(text, start, endExclusive)) {
+                if (!hasMatchableEdges(source) ||
+                    !hasSafeAsciiBoundaries(text, start, endExclusive) ||
+                    !hasSafeRepetitionBoundaries(text, start, endExclusive)
+                ) {
                     continue
                 }
                 val normalizedSource = normalizeForMatching(source)
@@ -82,7 +86,7 @@ class FuzzyTranscriptCorrector(
                 val spanCandidates = preparedLexemes.mapNotNull { lexeme ->
                     scoreSpan(text, start, endExclusive, source, normalizedSource, lexeme)
                 }.sortedWith(
-                    compareByDescending<ScoredReplacement> { it.score }
+                    compareByDescending<ScoredReplacement> { it.preciseScore }
                         .thenBy { it.canonical }
                 )
                 val best = spanCandidates.firstOrNull() ?: continue
@@ -93,11 +97,13 @@ class FuzzyTranscriptCorrector(
                         endExclusive = endExclusive,
                         source = source,
                         replacement = best.preferredReplacement,
-                        score = best.score,
+                        score = best.preciseScore.toFloat(),
                         reason = best.reason
                     ),
-                    ambiguous = runnerUp != null && best.score - runnerUp.score < AMBIGUITY_DELTA,
-                    canonical = best.canonical
+                    ambiguous = runnerUp != null &&
+                        best.preciseScore - runnerUp.preciseScore < AMBIGUITY_DELTA - SCORE_EPSILON,
+                    canonical = best.canonical,
+                    preciseScore = best.preciseScore
                 )
             }
         }
@@ -113,64 +119,63 @@ class FuzzyTranscriptCorrector(
         lexeme: PreparedLexeme
     ): ScoredReplacement? {
         if (source == lexeme.preferredReplacement) return null
-        if (lexeme.normalizedAliases.none { abs(it.length - normalizedSource.length) <= MAX_LENGTH_DELTA }) {
-            return null
-        }
-
         if (normalizedSource in lexeme.normalizedAliases) {
             return ScoredReplacement(
                 canonical = lexeme.canonical,
                 preferredReplacement = lexeme.preferredReplacement,
-                score = 1.0f,
+                preciseScore = 1.0,
                 reason = CorrectionReason.EXACT_ALIAS
             )
         }
-        if (singleRepetitionReductions(normalizedSource).any { it in lexeme.normalizedAliases }) {
-            return ScoredReplacement(
-                canonical = lexeme.canonical,
-                preferredReplacement = lexeme.preferredReplacement,
-                score = 1.0f,
-                reason = CorrectionReason.REPETITION
-            )
-        }
-        if (lexeme.normalizedAliases.any { alias ->
-                alias.length < normalizedSource.length && normalizedSource.contains(alias)
-            }
-        ) {
-            return null
-        }
-
-        val sourcePinyin = pinyinEncoder.encode(source)
         val context = contextCompatibility(
             lexeme.category,
             text.substring(max(0, start - CONTEXT_RADIUS), minOf(text.length, endExclusive + CONTEXT_RADIUS))
         )
-        val bestAlias = lexeme.aliases.map { alias ->
-            val pinyinSimilarity = normalizedSimilarity(sourcePinyin, alias.pinyin)
-            val editSimilarity = normalizedSimilarity(normalizedSource, alias.normalized)
-            val baseScore = PINYIN_WEIGHT * pinyinSimilarity + EDIT_WEIGHT * editSimilarity
-            AliasScore(
-                score = baseScore + CONTEXT_WEIGHT * context,
-                baseScore = baseScore,
-                pinyinSimilarity = pinyinSimilarity,
-                editSimilarity = editSimilarity
-            )
+        val matchInputs = buildList {
+            add(MatchInput(normalizedSource, pinyinEncoder.encode(source), repetition = false))
+            repetitionReductions(normalizedSource).forEach { reduced ->
+                add(MatchInput(reduced, pinyinEncoder.encode(reduced), repetition = true))
+            }
+        }
+        val bestAlias = matchInputs.flatMap { input ->
+            if (input.normalized !in lexeme.normalizedAliases &&
+                hasUnsafeEmbeddedAlias(input.normalized, lexeme.aliases)
+            ) {
+                return@flatMap emptyList()
+            }
+            lexeme.aliases.mapNotNull { alias ->
+                if (abs(alias.normalized.length - input.normalized.length) > MAX_LENGTH_DELTA) {
+                    return@mapNotNull null
+                }
+                val pinyinSimilarity = normalizedSimilarity(input.pinyin, alias.pinyin)
+                val editSimilarity = normalizedSimilarity(input.normalized, alias.normalized)
+                val baseScore = PINYIN_WEIGHT * pinyinSimilarity + EDIT_WEIGHT * editSimilarity
+                AliasScore(
+                    preciseScore = baseScore + CONTEXT_WEIGHT * context,
+                    baseScore = baseScore,
+                    pinyinSimilarity = pinyinSimilarity,
+                    editSimilarity = editSimilarity,
+                    repetition = input.repetition
+                )
+            }
         }.maxWithOrNull(
-            compareBy<AliasScore> { it.score }
+            compareBy<AliasScore> { it.preciseScore }
                 .thenBy { it.pinyinSimilarity }
                 .thenBy { it.editSimilarity }
+                .thenBy { it.repetition }
         ) ?: return null
-        if (bestAlias.score < MIN_SCORE) return null
+        if (bestAlias.preciseScore < MIN_SCORE) return null
 
         val reason = when {
-            bestAlias.baseScore < MIN_SCORE && context > 0.0f -> CorrectionReason.CONTEXT
+            bestAlias.repetition -> CorrectionReason.REPETITION
+            bestAlias.baseScore < MIN_SCORE && context > 0.0 -> CorrectionReason.CONTEXT
             bestAlias.pinyinSimilarity > bestAlias.editSimilarity -> CorrectionReason.PINYIN
             else -> CorrectionReason.EDIT_DISTANCE
         }
         return ScoredReplacement(
             canonical = lexeme.canonical,
             preferredReplacement = lexeme.preferredReplacement,
-            score = bestAlias.score,
+            preciseScore = bestAlias.preciseScore,
             reason = reason
         )
     }
@@ -187,7 +192,7 @@ class FuzzyTranscriptCorrector(
                 val suffix = checkNotNull(bestFrom[candidate.replacement.endExclusive])
                 val proposed = Selection(
                     candidates = listOf(candidate) + suffix.candidates,
-                    totalScore = candidate.replacement.score + suffix.totalScore,
+                    totalScore = candidate.preciseScore + suffix.totalScore,
                     coveredLength = candidate.replacement.endExclusive - candidate.replacement.start +
                         suffix.coveredLength
                 )
@@ -199,7 +204,7 @@ class FuzzyTranscriptCorrector(
     }
 
     private fun isPreferred(candidate: Selection, incumbent: Selection): Boolean {
-        if (candidate.totalScore != incumbent.totalScore) {
+        if (abs(candidate.totalScore - incumbent.totalScore) > SCORE_EPSILON) {
             return candidate.totalScore > incumbent.totalScore
         }
         if (candidate.coveredLength != incumbent.coveredLength) {
@@ -235,7 +240,7 @@ class FuzzyTranscriptCorrector(
         )
     }
 
-    private fun contextCompatibility(category: CorrectionCategory, surroundingText: String): Float {
+    private fun contextCompatibility(category: CorrectionCategory, surroundingText: String): Double {
         val normalized = surroundingText.lowercase(Locale.ROOT)
         val compatible = when (category) {
             CorrectionCategory.DEVICE -> normalized.any { it in "的把将请给对在" } ||
@@ -248,25 +253,34 @@ class FuzzyTranscriptCorrector(
             CorrectionCategory.BOOLEAN -> BOOLEAN_CONTEXT.any(normalized::contains)
             CorrectionCategory.TEMPLATE -> TEMPLATE_CONTEXT.any(normalized::contains)
         }
-        return if (compatible) 1.0f else 0.0f
+        return if (compatible) 1.0 else 0.0
     }
 
-    private fun singleRepetitionReductions(text: String): Sequence<String> = sequence {
-        for (segmentLength in 1..text.length / 2) {
-            for (start in 0..text.length - segmentLength * 2) {
-                val segment = text.substring(start, start + segmentLength)
-                if (text.regionMatches(start + segmentLength, segment, 0, segmentLength)) {
-                    yield(text.removeRange(start, start + segmentLength))
+    private fun repetitionReductions(text: String): List<String> {
+        val reductions = linkedSetOf<String>()
+        val pending = ArrayDeque<String>()
+        pending.add(text)
+        while (pending.isNotEmpty()) {
+            val current = pending.removeFirst()
+            for (segmentLength in 1..current.length / 2) {
+                for (start in 0..current.length - segmentLength * 2) {
+                    val segment = current.substring(start, start + segmentLength)
+                    if (current.regionMatches(start + segmentLength, segment, 0, segmentLength)) {
+                        val reduced = current.removeRange(start, start + segmentLength)
+                        if (reductions.add(reduced)) pending.add(reduced)
+                    }
                 }
             }
         }
+        reductions.remove(text)
+        return reductions.toList()
     }
 
-    private fun normalizedSimilarity(left: String, right: String): Float {
-        if (left.isEmpty() && right.isEmpty()) return 1.0f
+    private fun normalizedSimilarity(left: String, right: String): Double {
+        if (left.isEmpty() && right.isEmpty()) return 1.0
         val denominator = max(left.length, right.length)
-        if (denominator == 0) return 0.0f
-        return 1.0f - levenshtein(left, right).toFloat() / denominator
+        if (denominator == 0) return 0.0
+        return 1.0 - levenshtein(left, right).toDouble() / denominator
     }
 
     private fun levenshtein(left: String, right: String): Int {
@@ -301,6 +315,26 @@ class FuzzyTranscriptCorrector(
         return !unsafePrefix && !unsafeSuffix
     }
 
+    private fun hasSafeRepetitionBoundaries(text: String, start: Int, endExclusive: Int): Boolean {
+        val startsInsideRepeatedRun = text[start].isCjkUnifiedIdeograph() && text.getOrNull(start - 1) == text[start]
+        val endsInsideRepeatedRun = text[endExclusive - 1].isCjkUnifiedIdeograph() &&
+            text.getOrNull(endExclusive) == text[endExclusive - 1]
+        return !startsInsideRepeatedRun && !endsInsideRepeatedRun
+    }
+
+    private fun hasUnsafeEmbeddedAlias(source: String, aliases: List<PreparedAlias>): Boolean =
+        aliases.any { alias ->
+            val aliasStart = source.indexOf(alias.normalized)
+            alias.normalized.isNotEmpty() && aliasStart >= 0 &&
+                (aliasStart > 0 || !alias.normalized.all { it.isAsciiLetterOrDigit() })
+        }
+
+    private fun Char.isAsciiLetterOrDigit(): Boolean =
+        this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
+
+    private fun Char.isCjkUnifiedIdeograph(): Boolean =
+        code in 0x3400..0x4DBF || code in 0x4E00..0x9FFF || code in 0xF900..0xFAFF
+
     private fun Char?.isAsciiWordCharacter(): Boolean =
         this != null && (this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9' || this == '_')
 
@@ -314,42 +348,51 @@ class FuzzyTranscriptCorrector(
 
     private data class PreparedAlias(val normalized: String, val pinyin: String)
 
+    private data class MatchInput(
+        val normalized: String,
+        val pinyin: String,
+        val repetition: Boolean
+    )
+
     private data class AliasScore(
-        val score: Float,
-        val baseScore: Float,
-        val pinyinSimilarity: Float,
-        val editSimilarity: Float
+        val preciseScore: Double,
+        val baseScore: Double,
+        val pinyinSimilarity: Double,
+        val editSimilarity: Double,
+        val repetition: Boolean
     )
 
     private data class ScoredReplacement(
         val canonical: String,
         val preferredReplacement: String,
-        val score: Float,
+        val preciseScore: Double,
         val reason: CorrectionReason
     )
 
     private data class Candidate(
         val replacement: CorrectionReplacement,
         val ambiguous: Boolean,
-        val canonical: String
+        val canonical: String,
+        val preciseScore: Double
     )
 
     private data class Selection(
         val candidates: List<Candidate>,
-        val totalScore: Float,
+        val totalScore: Double,
         val coveredLength: Int
     ) {
         companion object {
-            val EMPTY = Selection(emptyList(), 0.0f, 0)
+            val EMPTY = Selection(emptyList(), 0.0, 0)
         }
     }
 
     private companion object {
-        const val PINYIN_WEIGHT = 0.55f
-        const val EDIT_WEIGHT = 0.35f
-        const val CONTEXT_WEIGHT = 0.10f
-        const val MIN_SCORE = 0.82f
-        const val AMBIGUITY_DELTA = 0.08f
+        const val PINYIN_WEIGHT = 0.55
+        const val EDIT_WEIGHT = 0.35
+        const val CONTEXT_WEIGHT = 0.10
+        const val MIN_SCORE = 0.82
+        const val AMBIGUITY_DELTA = 0.08
+        const val SCORE_EPSILON = 1e-9
         const val MAX_LENGTH_DELTA = 2
         const val CONTEXT_RADIUS = 12
         const val CHINESE_NUMBERS = "零〇一二两三四五六七八九十百千万"

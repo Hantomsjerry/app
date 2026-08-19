@@ -28,7 +28,7 @@ object SpeechCorrectionDictionary {
             "lv1Sensitivity",
             setOf(
                 "lv1Sensitivity", "Lv1 sensitivity", "level 1 sensitivity",
-                "Lv1灵敏度", "Lv1 灵敏度", "Lv1敏感度", "Lv1 敏感度", "一级灵敏度", "一级敏感度"
+                "Lv1灵敏度", "Lv1 灵敏度", "Lv1敏感度", "Lv1 敏感度", "一级灵敏度", "一级灵敏度杜", "一级敏感度"
             ),
             CorrectionCategory.PARAMETER,
             preferredReplacement = "Lv1灵敏度"

@@ -1,0 +1,44 @@
+一号机 :0.5
+二号机 :0.5
+三号机 :0.5
+MACHINE ONE :0.5
+MACHINE TWO :0.5
+MACHINE THREE :0.5
+LV1 :0.5
+LV2 :0.5
+LV3 :0.5
+L V 1 :0.5
+L V 2 :0.5
+L V 3 :0.5
+LEVEL ONE :0.5
+LEVEL TWO :0.5
+LEVEL THREE :0.5
+灵敏度 :0.5
+敏感度 :0.5
+强度 :0.5
+浓淡 :0.5
+密度 :0.5
+最小面积 :0.5
+强化推理 :0.5
+增强推理 :0.5
+增强推断 :0.5
+面积屏蔽 :0.5
+区域屏蔽 :0.5
+区域遮罩 :0.5
+区域掩码 :0.5
+动作持续时间 :0.5
+动作时长 :0.5
+剔除延时 :0.5
+拒绝延迟 :0.5
+拒绝等待 :0.5
+模板 :0.5
+TEMPLATE :0.5
+SENSITIVITY :0.5
+STRENGTH :0.5
+DENSITY :0.5
+MINIMUM AREA :0.5
+ENHANCED INFERENCE :0.5
+AREA MASK :0.5
+ACTION DURATION :0.5
+REJECT DELAY :0.5
+400 M M BASE ENGINE :0.5

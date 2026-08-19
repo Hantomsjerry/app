@@ -1,0 +1,22 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+/.kotlin/
+/.agents/
+/.superpowers/
+.DS_Store
+/build
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.aab
+
+# Local device/debug captures
+/after-tap.png
+/phone-screen.png
+/phone-window.xml
+/tap-test.png

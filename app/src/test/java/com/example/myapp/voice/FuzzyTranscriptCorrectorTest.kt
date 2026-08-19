@@ -53,8 +53,57 @@ class FuzzyTranscriptCorrectorTest {
 
         assertEquals("把Lv1灵敏度调到97", result.correctedText)
         assertEquals("一级灵敏度杜", result.replacements.single().source)
-        assertEquals(1.0f, result.replacements.single().score)
-        assertEquals(CorrectionReason.EXACT_ALIAS, result.replacements.single().reason)
+        assertTrue(result.replacements.single().score in 0.82f..<1.0f)
+        assertTrue(result.replacements.single().reason != CorrectionReason.EXACT_ALIAS)
+    }
+
+    @Test
+    fun correctsGenericCjkSuffixInsertionAtTheAcceptanceThreshold() {
+        val result = correctorWithEntries(
+            lexeme("target", "天地玄黄")
+        ).correct("天地玄黄宇 7")
+
+        assertEquals("target 7", result.correctedText)
+        assertEquals("天地玄黄宇", result.replacements.single().source)
+        assertEquals(0.82f, result.replacements.single().score, 0.0001f)
+    }
+
+    @Test
+    fun cjkSuffixCorrectionDoesNotConsumeCommandContextNegationOrAliasPrefixes() {
+        val stableLexeme = CorrectionLexeme(
+            canonical = "wire",
+            aliases = setOf("甲乙丙丁"),
+            category = CorrectionCategory.PARAMETER,
+            preferredReplacement = "甲乙丙丁"
+        )
+        val stableCorrector = correctorWithEntries(stableLexeme)
+
+        listOf("甲乙丙丁调到7", "不甲乙丙丁 7", "戊甲乙丙丁 7").forEach { source ->
+            val result = stableCorrector.correct(source)
+
+            assertEquals(source, result.correctedText)
+            assertTrue(result.replacements.toString(), result.replacements.isEmpty())
+        }
+    }
+
+    @Test
+    fun unrelatedLongerFuzzyMatchDoesNotSuppressAnExactAliasPrefix() {
+        val source = "甲乙丙"
+        val unrelatedAlias = "甲戊丙"
+        val encoder = PinyinEncoder { text ->
+            when (text) {
+                source, unrelatedAlias -> "same"
+                else -> TestPinyinEncoder.encode(text)
+            }
+        }
+        val result = correctorWithEntries(
+            lexeme("short", "甲乙"),
+            lexeme("unrelated", unrelatedAlias),
+            pinyinEncoder = encoder
+        ).correct("$source 7")
+
+        assertEquals("short丙 7", result.correctedText)
+        assertEquals(listOf("甲乙"), result.replacements.map { it.source })
     }
 
     @Test
@@ -142,9 +191,10 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
-    fun candidatesExactlyPointZeroEightApartAreNotAmbiguous() {
+    fun representedDifferenceJustBelowPointZeroEightIsAmbiguous() {
         val source = "aaaaaaaaaaaaaa"
         val nearAlias = "aaaaaaaaaaaaab"
+        val representedDifference = 1.0 - (0.55 * 0.9 + 0.35 * (13.0 / 14.0) + 0.10)
         val encoder = PinyinEncoder { text ->
             when (text) {
                 source -> "aaaaaaaaaa"
@@ -158,6 +208,31 @@ class FuzzyTranscriptCorrectorTest {
             pinyinEncoder = encoder
         ).correct("$source 7")
 
+        assertEquals(0.07999999999999996, representedDifference, 0.0)
+        assertEquals("alpha 7", result.correctedText)
+        assertTrue(result.ambiguous)
+        assertEquals(1, result.replacements.size)
+    }
+
+    @Test
+    fun representedDifferenceAbovePointZeroEightIsNotAmbiguous() {
+        val source = "aaaaaaaaaaaaa"
+        val nearAlias = "aaaaaaaaaaaab"
+        val representedDifference = 1.0 - (0.55 * 0.9 + 0.35 * (12.0 / 13.0) + 0.10)
+        val encoder = PinyinEncoder { text ->
+            when (text) {
+                source -> "aaaaaaaaaa"
+                nearAlias -> "aaaaaaaaab"
+                else -> TestPinyinEncoder.encode(text)
+            }
+        }
+        val result = correctorWithEntries(
+            lexeme("alpha", source),
+            lexeme("beta", nearAlias),
+            pinyinEncoder = encoder
+        ).correct("$source 7")
+
+        assertEquals(0.08192307692307688, representedDifference, 0.0)
         assertEquals("alpha 7", result.correctedText)
         assertFalse(result.ambiguous)
         assertEquals(1, result.replacements.size)
@@ -184,6 +259,38 @@ class FuzzyTranscriptCorrectorTest {
 
     @Test
     fun globalSelectionPrefersFewerReplacementsAfterScoreAndCoverageTie() {
+        val source = CharArray(112) { offset -> (0x7000 + offset).toChar() }.also { characters ->
+            (1 until 7).forEach { boundary -> characters[boundary * 16] = '的' }
+        }.concatToString()
+        val sourceChunks = (0 until 8).map { index -> source.substring(index * 14, (index + 1) * 14) }
+        val exactBoundaries = (0..7).map { it * 16 }
+        val exactLexemes = exactBoundaries.zipWithNext().mapIndexed { index, (start, end) ->
+            lexeme("A${index + 1}", source.substring(start, end))
+        }
+        val fuzzyAliases = sourceChunks.mapIndexed { index, chunk ->
+            chunk.toCharArray().also { characters ->
+                characters[1] = (0x8000 + index).toChar()
+            }.concatToString()
+        }
+        val pinyinByText = buildMap {
+            sourceChunks.zip(fuzzyAliases).forEach { (chunk, alias) ->
+                put(chunk, "aaaaaa")
+                put(alias, "aaaaaa")
+            }
+        }
+        val encoder = PinyinEncoder { text -> pinyinByText[text] ?: TestPinyinEncoder.encode(text) }
+        val fuzzyLexemes = fuzzyAliases.mapIndexed { index, alias -> lexeme("B${index + 1}", alias) }
+        val result = FuzzyTranscriptCorrector(
+            dictionary = exactLexemes + fuzzyLexemes,
+            pinyinEncoder = encoder
+        ).correct(source)
+
+        assertEquals(result.replacements.toString(), "A1A2A3A4A5A6A7", result.correctedText)
+        assertEquals(7, result.replacements.size)
+    }
+
+    @Test
+    fun globalSelectionUsesTinyHigherDoubleTotalBeforeTieBreakers() {
         val sourceChunks = (0 until 6).map { chunkIndex ->
             buildString {
                 append('一')
@@ -213,8 +320,8 @@ class FuzzyTranscriptCorrectorTest {
             pinyinEncoder = encoder
         ).correct(source)
 
-        assertEquals("A1A2A3A4A5", result.correctedText)
-        assertEquals(5, result.replacements.size)
+        assertEquals("B1B2B3B4B5B6", result.correctedText)
+        assertEquals(6, result.replacements.size)
     }
 
     @Test

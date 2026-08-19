@@ -1,6 +1,7 @@
 package com.example.myapp.voice
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,7 +39,7 @@ class SpeechCorrectionDictionaryTest {
             "Lv1" to setOf("l v 1", "lv一", "一级"),
             "Lv2" to setOf("l v 2", "lv二", "二级", "绿二", "吕二"),
             "Lv3" to setOf("l v 3", "lv三", "三级"),
-            "lv1Sensitivity" to setOf("Lv1灵敏度", "一级灵敏度", "一级灵敏度杜"),
+            "lv1Sensitivity" to setOf("Lv1灵敏度", "一级灵敏度"),
             "enhancedInference" to setOf("强化推理", "增强推理", "增强推断"),
             "rejectDelay" to setOf("剔除延时", "剔除延迟", "去除延时", "拒绝延迟", "剔除岩石")
         )
@@ -46,6 +47,7 @@ class SpeechCorrectionDictionaryTest {
         required.forEach { (canonical, aliases) ->
             assertTrue(aliasesByCanonical.getValue(canonical).containsAll(aliases))
         }
+        assertFalse(aliasesByCanonical.getValue("lv1Sensitivity").contains("一级灵敏度杜"))
     }
 
     @Test

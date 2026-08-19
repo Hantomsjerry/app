@@ -101,13 +101,17 @@ class FuzzyTranscriptCorrector(
                         reason = best.reason
                     ),
                     ambiguous = runnerUp != null &&
-                        best.preciseScore - runnerUp.preciseScore < AMBIGUITY_DELTA - SCORE_EPSILON,
+                        best.preciseScore - runnerUp.preciseScore < AMBIGUITY_DELTA,
                     canonical = best.canonical,
-                    preciseScore = best.preciseScore
+                    preciseScore = best.preciseScore,
+                    matchedAlias = best.matchedAlias
                 )
             }
         }
-        return candidates
+        return candidates.filterNot { candidate ->
+            candidate.replacement.reason == CorrectionReason.EXACT_ALIAS &&
+                candidates.any { extension -> isSafeCjkSuffixExtension(candidate, extension, text) }
+        }
     }
 
     private fun scoreSpan(
@@ -124,7 +128,8 @@ class FuzzyTranscriptCorrector(
                 canonical = lexeme.canonical,
                 preferredReplacement = lexeme.preferredReplacement,
                 preciseScore = 1.0,
-                reason = CorrectionReason.EXACT_ALIAS
+                reason = CorrectionReason.EXACT_ALIAS,
+                matchedAlias = normalizedSource
             )
         }
         val context = contextCompatibility(
@@ -138,12 +143,10 @@ class FuzzyTranscriptCorrector(
             }
         }
         val bestAlias = matchInputs.flatMap { input ->
-            if (input.normalized !in lexeme.normalizedAliases &&
-                hasUnsafeEmbeddedAlias(input.normalized, lexeme.aliases)
-            ) {
-                return@flatMap emptyList()
-            }
             lexeme.aliases.mapNotNull { alias ->
+                if (hasUnsafeEmbeddedAlias(input.normalized, alias)) {
+                    return@mapNotNull null
+                }
                 if (abs(alias.normalized.length - input.normalized.length) > MAX_LENGTH_DELTA) {
                     return@mapNotNull null
                 }
@@ -155,7 +158,8 @@ class FuzzyTranscriptCorrector(
                     baseScore = baseScore,
                     pinyinSimilarity = pinyinSimilarity,
                     editSimilarity = editSimilarity,
-                    repetition = input.repetition
+                    repetition = input.repetition,
+                    matchedAlias = alias.normalized
                 )
             }
         }.maxWithOrNull(
@@ -176,7 +180,8 @@ class FuzzyTranscriptCorrector(
             canonical = lexeme.canonical,
             preferredReplacement = lexeme.preferredReplacement,
             preciseScore = bestAlias.preciseScore,
-            reason = reason
+            reason = reason,
+            matchedAlias = bestAlias.matchedAlias
         )
     }
 
@@ -204,7 +209,7 @@ class FuzzyTranscriptCorrector(
     }
 
     private fun isPreferred(candidate: Selection, incumbent: Selection): Boolean {
-        if (abs(candidate.totalScore - incumbent.totalScore) > SCORE_EPSILON) {
+        if (candidate.totalScore != incumbent.totalScore) {
             return candidate.totalScore > incumbent.totalScore
         }
         if (candidate.coveredLength != incumbent.coveredLength) {
@@ -322,15 +327,34 @@ class FuzzyTranscriptCorrector(
         return !startsInsideRepeatedRun && !endsInsideRepeatedRun
     }
 
-    private fun hasUnsafeEmbeddedAlias(source: String, aliases: List<PreparedAlias>): Boolean =
-        aliases.any { alias ->
-            val aliasStart = source.indexOf(alias.normalized)
-            alias.normalized.isNotEmpty() && aliasStart >= 0 &&
-                (aliasStart > 0 || !alias.normalized.all { it.isAsciiLetterOrDigit() })
-        }
+    private fun hasUnsafeEmbeddedAlias(source: String, alias: PreparedAlias): Boolean {
+        if (alias.normalized.isEmpty()) return false
+        val aliasStart = source.indexOf(alias.normalized)
+        if (aliasStart < 0 || source.length == alias.normalized.length) return false
+        if (aliasStart > 0) return true
+        return source.substring(alias.normalized.length).startsWithSemanticBoundary()
+    }
 
-    private fun Char.isAsciiLetterOrDigit(): Boolean =
-        this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
+    private fun String.startsWithSemanticBoundary(): Boolean {
+        val first = firstOrNull() ?: return false
+        return first.isDigit() || first in CHINESE_NUMBERS || first in CJK_SEMANTIC_BOUNDARIES ||
+            ASCII_SEMANTIC_BOUNDARIES.any(::startsWith)
+    }
+
+    private fun isSafeCjkSuffixExtension(
+        exact: Candidate,
+        extension: Candidate,
+        text: String
+    ): Boolean {
+        if (!extension.matchedAlias.startsWith(exact.matchedAlias) ||
+            extension.replacement.start != exact.replacement.start ||
+            extension.replacement.endExclusive <= exact.replacement.endExclusive
+        ) {
+            return false
+        }
+        return text.substring(exact.replacement.endExclusive, extension.replacement.endExclusive)
+            .all { it.isCjkUnifiedIdeograph() }
+    }
 
     private fun Char.isCjkUnifiedIdeograph(): Boolean =
         code in 0x3400..0x4DBF || code in 0x4E00..0x9FFF || code in 0xF900..0xFAFF
@@ -359,21 +383,24 @@ class FuzzyTranscriptCorrector(
         val baseScore: Double,
         val pinyinSimilarity: Double,
         val editSimilarity: Double,
-        val repetition: Boolean
+        val repetition: Boolean,
+        val matchedAlias: String
     )
 
     private data class ScoredReplacement(
         val canonical: String,
         val preferredReplacement: String,
         val preciseScore: Double,
-        val reason: CorrectionReason
+        val reason: CorrectionReason,
+        val matchedAlias: String
     )
 
     private data class Candidate(
         val replacement: CorrectionReplacement,
         val ambiguous: Boolean,
         val canonical: String,
-        val preciseScore: Double
+        val preciseScore: Double,
+        val matchedAlias: String
     )
 
     private data class Selection(
@@ -392,10 +419,10 @@ class FuzzyTranscriptCorrector(
         const val CONTEXT_WEIGHT = 0.10
         const val MIN_SCORE = 0.82
         const val AMBIGUITY_DELTA = 0.08
-        const val SCORE_EPSILON = 1e-9
         const val MAX_LENGTH_DELTA = 2
         const val CONTEXT_RADIUS = 12
         const val CHINESE_NUMBERS = "零〇一二两三四五六七八九十百千万"
+        const val CJK_SEMANTIC_BOUNDARIES = "不别勿未没无调设改变开关启停禁到为成的并和再请把将给对在值"
 
         val DEVICE_CONTEXT = listOf("machine", "号")
         val LEVEL_CONTEXT = listOf("强度", "灵敏", "敏感", "浓淡", "密度", "strength", "sensitivity", "density")
@@ -403,5 +430,6 @@ class FuzzyTranscriptCorrector(
         val ACTION_CONTEXT = listOf("设置", "调整", "修改", "change", "set")
         val BOOLEAN_CONTEXT = listOf("开启", "打开", "关闭", " on", " off", "true", "false")
         val TEMPLATE_CONTEXT = listOf("模板", "template", ".engine")
+        val ASCII_SEMANTIC_BOUNDARIES = listOf("set", "change", "on", "off", "true", "false")
     }
 }

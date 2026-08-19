@@ -73,6 +73,21 @@ class StreamingSpeechEngineTest {
     }
 
     @Test
+    fun acceptFeedsOnlyTheValidPrefixOfAPreallocatedPcmBuffer() = runTest {
+        val fixture = fixture()
+        fixture.engine.startSession {}
+
+        fixture.engine.acceptSamples(
+            samples = shortArrayOf(1, 2, 3, 99, 99),
+            sampleCount = 3
+        )
+
+        val accepted = fixture.recognizer.streams.single().accepted.single().samples
+        assertArrayEquals(pcm16ToFloat(shortArrayOf(1, 2, 3)), accepted, 0.000001f)
+        fixture.engine.close()
+    }
+
+    @Test
     fun changedPartialTextIsEmittedAtMostEvery100Millis() = runTest {
         var nowMillis = 1_000L
         val fixture = fixture(nowMillis = { nowMillis })
@@ -96,7 +111,7 @@ class StreamingSpeechEngineTest {
     }
 
     @Test
-    fun finishAdds800MillisTailThenInputFinishedAndReturnsTrimmedFinal() = runTest {
+    fun finishSignalsInputFinishedWithoutAppendingSyntheticAudio() = runTest {
         val fixture = fixture()
         fixture.engine.startSession {}
         fixture.recognizer.queueResults(" partial ", " final text ")
@@ -104,11 +119,8 @@ class StreamingSpeechEngineTest {
         val finalText = fixture.engine.finishSession()
 
         val stream = fixture.recognizer.streams.single()
-        val tail = stream.accepted.single()
-        assertEquals(16_000, tail.sampleRate)
-        assertEquals(12_800, tail.samples.size)
-        assertTrue(tail.samples.all { it == 0.0f })
-        assertEquals(listOf("accept", "inputFinished", "release"), stream.lifecycle)
+        assertTrue(stream.accepted.isEmpty())
+        assertEquals(listOf("inputFinished", "release"), stream.lifecycle)
         assertEquals(2, fixture.recognizer.decodeCalls)
         assertEquals("final text", finalText)
         assertEquals(1, stream.releaseCalls)

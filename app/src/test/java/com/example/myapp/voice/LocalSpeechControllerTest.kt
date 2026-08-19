@@ -18,7 +18,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -175,6 +174,35 @@ class LocalSpeechControllerTest {
     }
 
     @Test
+    fun recognizerEndpointCannotFinalizeBeforeManualStop() = runTest {
+        val recorder = FakeRecorder()
+        val engine = FakeStreamingEngine(result = "Lv2强度调到60")
+        val attempts = mutableListOf<SpeechFinalizationAttemptSource>()
+        val finals = mutableListOf<SpeechRecognitionText>()
+        val controller = controller(
+            recorder = recorder,
+            engine = engine,
+            finalizationAttemptObserver = SpeechFinalizationAttemptObserver(attempts::add),
+            onFinalText = finals::add
+        )
+
+        val generation = controller.start()
+        runCurrent()
+
+        assertTrue(attempts.isEmpty())
+        assertEquals(0, recorder.stopCalls)
+        assertEquals(0, engine.finishCalls)
+
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        assertEquals(listOf(SpeechFinalizationAttemptSource.Manual), attempts)
+        assertEquals(1, recorder.stopCalls)
+        assertEquals(1, engine.finishCalls)
+        assertEquals(SpeechRecognitionText(generation, "Lv2强度调到60"), finals.single())
+    }
+
+    @Test
     fun immediateStopWaitsForAsynchronousStartupThenFinalizes() = runTest {
         val startEntered = CompletableDeferred<Unit>()
         val startRelease = CompletableDeferred<Unit>()
@@ -261,7 +289,7 @@ class LocalSpeechControllerTest {
         runCurrent()
 
         assertEquals(
-            listOf("session-created", "recorder-start", "recording-started", "engine-start", "accept"),
+            listOf("session-created", "recorder-start", "recording-started", "engine-start"),
             order
         )
     }
@@ -270,7 +298,7 @@ class LocalSpeechControllerTest {
     fun recorderBuffersFirstAudioWhileOnlineStreamIsBeingCreated() = runTest {
         val streamCreationEntered = CompletableDeferred<Unit>()
         val releaseStreamCreation = CompletableDeferred<Unit>()
-        val firstChunk = ShortArray(1_024) { 7 }
+        val firstChunk = ShortArray(PcmRecordingPolicy.MIN_SAMPLES) { 7 }
         val recorder = FakeRecorder(chunks = listOf(firstChunk))
         val engine = FakeStreamingEngine(startBlock = {
             streamCreationEntered.complete(Unit)
@@ -288,12 +316,20 @@ class LocalSpeechControllerTest {
         releaseStreamCreation.complete(Unit)
         runCurrent()
 
+        assertTrue(engine.accepted.isEmpty())
+        controller.stopAndTranscribe()
+        runCurrent()
+
         assertEquals(listOf(firstChunk.toList()), engine.accepted.map(ShortArray::toList))
     }
 
     @Test
-    fun recorderChunksReachEngineInOrderOnConsumerJob() = runTest {
-        val chunks = listOf(shortArrayOf(1, 11), shortArrayOf(2, 22), shortArrayOf(3, 33))
+    fun recorderChunksAreSubmittedOnceOnlyAfterManualStop() = runTest {
+        val chunks = listOf(
+            ShortArray(1_600) { 1 },
+            ShortArray(1_600) { 2 },
+            ShortArray(1_600) { 3 }
+        )
         val recorder = FakeRecorder(chunks = chunks)
         val engine = FakeStreamingEngine(recorderCallbackActive = recorder.callbackActive)
         val controller = controller(recorder, engine)
@@ -301,12 +337,20 @@ class LocalSpeechControllerTest {
         controller.start()
         runCurrent()
 
-        assertEquals(chunks.map(ShortArray::toList), engine.accepted.map(ShortArray::toList))
+        assertTrue(engine.accepted.isEmpty())
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        val submitted = engine.accepted.single()
+        assertEquals(4_800, submitted.size)
+        assertTrue(submitted.take(1_600).all { it.toInt() == 1 })
+        assertTrue(submitted.slice(1_600 until 3_200).all { it.toInt() == 2 })
+        assertTrue(submitted.drop(3_200).all { it.toInt() == 3 })
         assertFalse(engine.acceptedFromRecorderCallback.get())
     }
 
     @Test
-    fun partialTextIsNormalizedBeforeCallback() = runTest {
+    fun partialTextIsNotPublishedToUi() = runTest {
         val partials = mutableListOf<SpeechRecognitionText>()
         val engine = FakeStreamingEngine(partialText = "把 l v 1 灵敏度改为 32")
         val controller = controller(FakeRecorder(), engine, onPartialText = partials::add)
@@ -314,10 +358,7 @@ class LocalSpeechControllerTest {
         val generation = controller.start()
         runCurrent()
 
-        assertEquals(
-            listOf(SpeechRecognitionText(generation, "把 Lv1 灵敏度改为 32")),
-            partials
-        )
+        assertTrue(partials.isEmpty())
     }
 
     @Test
@@ -341,9 +382,9 @@ class LocalSpeechControllerTest {
 
         val generation = controller.start()
         runCurrent()
-        acceptEntered.await()
         controller.stopAndTranscribe()
         runCurrent()
+        acceptEntered.await()
 
         assertTrue(events.contains("stopped:$generation"))
         assertFalse(events.contains("finish"))
@@ -358,7 +399,7 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun manualStopDecodeFailureUsesOneTerminalCleanupAndDiscardsQueuedAudio() = runTest {
+    fun manualStopDecodeFailureUsesOneTerminalCleanupAndReleasesBufferedAudio() = runTest {
         val acceptEntered = CompletableDeferred<Unit>()
         val releaseAccept = CompletableDeferred<Unit>()
         val attempts = mutableListOf<SpeechFinalizationAttemptSource>()
@@ -380,13 +421,11 @@ class LocalSpeechControllerTest {
 
         val generation = controller.start()
         runCurrent()
-        acceptEntered.await()
         val failedSession = currentSession(controller)
             ?: throw AssertionError("Expected an active session")
         controller.stopAndTranscribe()
-        recorder.emit(ShortArray(1_024) { 2 })
-        recorder.emit(ShortArray(1_024) { 3 })
         runCurrent()
+        acceptEntered.await()
 
         assertEquals(1, events.count { it == "stopped:$generation" })
         assertTrue(events.none { it.startsWith("error:") })
@@ -400,8 +439,7 @@ class LocalSpeechControllerTest {
         assertEquals(0, engine.finishCalls)
         assertEquals(1, events.count { it == "stopped:$generation" })
         assertEquals(1, events.count { it == "error:$generation:${SpeechRecognitionFailureType.Service}" })
-        assertEquals(null, currentSession(controller))
-        assertTrue(audioChunks(failedSession).tryReceive().isFailure)
+        assertEquals(null, pcmBuffer(failedSession).take())
 
         controller.stopAndTranscribe()
         advanceTimeBy(PcmRecordingPolicy.MAX_DURATION_MILLIS + 1)
@@ -557,6 +595,11 @@ class LocalSpeechControllerTest {
         val generation = controller.start()
         runCurrent()
 
+        assertEquals(0, recorder.stopCalls)
+        assertTrue(errors.isEmpty())
+        controller.stopAndTranscribe()
+        runCurrent()
+
         assertEquals(1, recorder.stopCalls)
         assertEquals(1, engine.cancelCalls)
         assertEquals(0, engine.finishCalls)
@@ -573,7 +616,7 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun decodeFailureRetiresSessionCancelsTimeoutAndDiscardsQueuedAudio() = runTest {
+    fun decodeFailureAfterManualStopCancelsTimeoutAndReleasesBufferedAudio() = runTest {
         val attempts = mutableListOf<SpeechFinalizationAttemptSource>()
         val recorder = FakeRecorder(
             chunks = listOf(
@@ -593,15 +636,21 @@ class LocalSpeechControllerTest {
 
         controller.start()
         runCurrent()
+        val failedSession = currentSession(controller)
+            ?: throw AssertionError("Expected an active session")
+        controller.stopAndTranscribe()
+        runCurrent()
+
         assertEquals(1, recorder.stopCalls)
         assertEquals(1, engine.accepted.size)
         assertEquals(1, errors.size)
+        assertEquals(null, pcmBuffer(failedSession).take())
 
         controller.stopAndTranscribe()
         advanceTimeBy(PcmRecordingPolicy.MAX_DURATION_MILLIS + 1)
         runCurrent()
 
-        assertEquals(emptyList<SpeechFinalizationAttemptSource>(), attempts)
+        assertEquals(listOf(SpeechFinalizationAttemptSource.Manual), attempts)
         assertEquals(1, recorder.stopCalls)
         assertEquals(1, engine.cancelCalls)
         assertEquals(0, engine.finishCalls)
@@ -937,7 +986,7 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun closeWaitsForBlockedConsumerBeforeStreamAndEngineCleanup() {
+    fun closeWaitsForBlockedFinalSubmissionBeforeEngineCleanup() {
         val parentJob = SupervisorJob()
         val order = Collections.synchronizedList(mutableListOf<String>())
         val recordingStarted = CountDownLatch(1)
@@ -946,15 +995,15 @@ class LocalSpeechControllerTest {
         val recorderCleaned = CountDownLatch(1)
         val closeReturned = CountDownLatch(1)
         val closeFailures = ConcurrentLinkedQueue<Throwable>()
-        val recorder = FakeRecorder(cancelBlock = {
-            order += "recorder-cancel"
+        val recorder = FakeRecorder(stopBlock = {
+            order += "recorder-stop"
             recorderCleaned.countDown()
         })
         val engine = FakeStreamingEngine(
             acceptBlock = {
                 acceptEntered.countDown()
                 withContext(NonCancellable) { releaseAccept.await() }
-                order += "consumer-exit"
+                order += "accept-exit"
             },
             cancelBlock = { order += "stream-cancel" },
             closeBlock = { order += "engine-close" }
@@ -970,22 +1019,20 @@ class LocalSpeechControllerTest {
         try {
             controller.start()
             assertTrue(recordingStarted.await(1, TimeUnit.SECONDS))
+            controller.stopAndTranscribe()
             assertTrue(acceptEntered.await(1, TimeUnit.SECONDS))
+            assertTrue(recorderCleaned.await(1, TimeUnit.SECONDS))
             closer.start()
 
-            assertTrue(recorderCleaned.await(1, TimeUnit.SECONDS))
             assertFalse(closeReturned.await(150, TimeUnit.MILLISECONDS))
-            assertEquals(0, engine.cancelCalls)
             assertEquals(0, engine.closeCalls)
 
             releaseAccept.complete(Unit)
             assertTrue(closeReturned.await(2, TimeUnit.SECONDS))
             assertTrue(closeFailures.isEmpty())
-            assertEquals(1, engine.cancelCalls)
             assertEquals(1, engine.closeCalls)
-            assertTrue(order.indexOf("recorder-cancel") < order.indexOf("consumer-exit"))
-            assertTrue(order.indexOf("consumer-exit") < order.indexOf("stream-cancel"))
-            assertTrue(order.indexOf("stream-cancel") < order.indexOf("engine-close"))
+            assertTrue(order.indexOf("recorder-stop") < order.indexOf("accept-exit"))
+            assertTrue(order.indexOf("accept-exit") < order.indexOf("engine-close"))
         } finally {
             releaseAccept.complete(Unit)
             closer.join(5_000)
@@ -1189,7 +1236,6 @@ class LocalSpeechControllerTest {
             listOf(
                 "created:$generation",
                 "recording:$generation",
-                "partial:$generation:Lv2 strength",
                 "stopped:$generation",
                 "finish",
                 "final:$generation:done"
@@ -1253,20 +1299,20 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun reentrantPartialCloseReturnsButExternalCloseWaitsForCallbackQuiescence() {
+    fun reentrantRecordingCallbackCloseReturnsButExternalCloseWaitsForCallbackQuiescence() {
         val parentJob = SupervisorJob()
         val callbackCloseReturned = CountDownLatch(1)
         val releaseCallback = CountDownLatch(1)
         val callbackExited = CountDownLatch(1)
         val externalCloseReturned = CountDownLatch(1)
         val externalFailure = AtomicReference<Throwable?>()
-        val engine = FakeStreamingEngine(partialText = "close now")
+        val engine = FakeStreamingEngine()
         lateinit var controller: LocalSpeechController
         controller = realController(
             parentJob = parentJob,
             recorder = FakeRecorder(),
             engine = engine,
-            onPartialText = {
+            onRecordingStarted = {
                 controller.close()
                 callbackCloseReturned.countDown()
                 check(releaseCallback.await(5, TimeUnit.SECONDS)) { "callback was not released" }
@@ -1357,11 +1403,10 @@ class LocalSpeechControllerTest {
         return field.get(controller)
     }
 
-    @Suppress("UNCHECKED_CAST")
-    private fun audioChunks(session: Any): Channel<ShortArray> {
-        val field = session.javaClass.getDeclaredField("audioChunks")
+    private fun pcmBuffer(session: Any): PcmSessionBuffer {
+        val field = session.javaClass.getDeclaredField("pcmBuffer")
         field.isAccessible = true
-        return field.get(session) as Channel<ShortArray>
+        return field.get(session) as PcmSessionBuffer
     }
 
     private fun TestScope.closeAndDrain(controller: LocalSpeechController) {
@@ -1572,11 +1617,12 @@ class LocalSpeechControllerTest {
             partialCallback = onPartialText
         }
 
-        override suspend fun acceptSamples(samples: ShortArray) {
+        override suspend fun acceptSamples(samples: ShortArray, sampleCount: Int) {
             if (recorderCallbackActive?.get() == true) acceptedFromRecorderCallback.set(true)
             operationLog?.add("accept")
-            accepted += samples.copyOf()
-            acceptBlock(samples)
+            val validSamples = samples.copyOf(sampleCount)
+            accepted += validSamples
+            acceptBlock(validSamples)
             acceptFailure?.let { throw it }
             partialText?.let { partialCallback?.invoke(it) }
         }

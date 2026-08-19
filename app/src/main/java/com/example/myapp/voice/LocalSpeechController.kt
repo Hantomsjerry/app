@@ -16,7 +16,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -294,14 +293,6 @@ class LocalSpeechController internal constructor(
                         }
                     }
 
-                    is Command.DecodeFailed -> {
-                        if (activeSession === command.session && isCurrent(command.session)) {
-                            finalizeDecodeFailure(command.session)
-                            activeSession = null
-                            processorSession.compareAndSet(command.session, null)
-                        }
-                    }
-
                     Command.Cancel -> {
                         activeSession?.let {
                             cleanupActiveSession(it, cancelRecorderResource = true)
@@ -328,7 +319,7 @@ class LocalSpeechController internal constructor(
         try {
             pcmRecorder.start { samples ->
                 if (session.acceptsAudio()) {
-                    session.audioChunks.trySend(samples.copyOf())
+                    session.appendAudio(samples)
                 }
             }
         } catch (cancellation: CancellationException) {
@@ -337,7 +328,7 @@ class LocalSpeechController internal constructor(
             cancelTimeout(session)
             cancelRecorder(session)
             session.stopAudio()
-            session.audioChunks.close()
+            session.releaseBufferedAudio()
             publishRecorderFailure(session)
             return false
         }
@@ -358,7 +349,7 @@ class LocalSpeechController internal constructor(
         }
 
         try {
-            speechEngine.startSession { rawText -> publishPartial(session, rawText) }
+            speechEngine.startSession { }
             session.streamActive.set(true)
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -366,7 +357,7 @@ class LocalSpeechController internal constructor(
             cancelTimeout(session)
             cancelRecorder(session)
             session.stopAudio()
-            session.audioChunks.close()
+            session.releaseBufferedAudio()
             cancelStream(session)
             publishFailure(
                 session,
@@ -378,7 +369,7 @@ class LocalSpeechController internal constructor(
             cancelTimeout(session)
             cancelRecorder(session)
             session.stopAudio()
-            session.audioChunks.close()
+            session.releaseBufferedAudio()
             cancelStream(session)
             publishFailure(
                 session,
@@ -390,7 +381,7 @@ class LocalSpeechController internal constructor(
             cancelTimeout(session)
             cancelRecorder(session)
             session.stopAudio()
-            session.audioChunks.close()
+            session.releaseBufferedAudio()
             cancelStream(session)
             publishFailure(
                 session,
@@ -405,25 +396,7 @@ class LocalSpeechController internal constructor(
             return false
         }
 
-        session.consumerJob = controllerScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            consumeAudio(session)
-        }
         return true
-    }
-
-    private suspend fun consumeAudio(session: Session) {
-        try {
-            for (samples in session.audioChunks) {
-                speechEngine.acceptSamples(samples)
-            }
-        } catch (_: CancellationException) {
-            // Cancellation is the expected path for cancel, replacement, parent teardown, and close.
-        } catch (failure: Exception) {
-            if (session.consumerFailure.compareAndSet(null, failure)) {
-                prepareDecodeFailure(session)
-                commands.trySend(Command.DecodeFailed(session))
-            }
-        }
     }
 
     private fun publishPartial(session: Session, rawText: String) {
@@ -447,38 +420,29 @@ class LocalSpeechController internal constructor(
             withContext(NonCancellable) { pcmRecorder.stop() }
         } catch (_: Exception) {
             session.stopAudio()
-            session.audioChunks.close()
-            cancelAndJoinConsumer(session)
+            session.releaseBufferedAudio()
             cancelStream(session)
             publishRecorderFailure(session)
             session.terminal.set(true)
             return
         }
         session.stopAudio()
-        session.audioChunks.close()
 
         if (!publishIfCurrent(session) { onRecordingStopped(session.generation) }) {
-            cancelAndJoinConsumer(session)
+            session.releaseBufferedAudio()
             cancelStream(session)
             session.terminal.set(true)
             return
         }
 
-        joinConsumer(session)
-        if (session.consumerFailure.get() != null) {
-            finalizeDecodeFailure(
-                session = session,
-                recordingStoppedPublished = true,
-                consumerJoined = true
-            )
-            return
-        }
         if (!isCurrent(session)) {
+            session.releaseBufferedAudio()
             cancelStream(session)
             session.terminal.set(true)
             return
         }
         if (!PcmRecordingPolicy.isLongEnough(sampleCount)) {
+            session.releaseBufferedAudio()
             cancelStream(session)
             publishFailure(
                 session,
@@ -490,13 +454,16 @@ class LocalSpeechController internal constructor(
         }
 
         val text = try {
+            submitBufferedAudio(session)
             transcriptNormalizer(speechEngine.finishSession().trim())
         } catch (cancellation: CancellationException) {
+            session.releaseBufferedAudio()
             cancelStream(session)
             session.terminal.set(true)
             return
         } catch (_: Exception) {
-            session.streamActive.set(false)
+            session.releaseBufferedAudio()
+            cancelStream(session)
             publishServiceFailure(session)
             session.terminal.set(true)
             return
@@ -517,34 +484,6 @@ class LocalSpeechController internal constructor(
         }
     }
 
-    private suspend fun finalizeDecodeFailure(
-        session: Session,
-        recordingStoppedPublished: Boolean = false,
-        consumerJoined: Boolean = false
-    ) {
-        if (!session.terminal.compareAndSet(false, true)) return
-        cancelTimeout(session)
-        stopPartials(session)
-        if (session.claimRecorderCleanup()) {
-            try {
-                withContext(NonCancellable) { pcmRecorder.stop() }
-            } catch (_: Exception) {
-                // The decode failure remains the primary user-visible failure.
-            }
-        }
-        session.stopAudio()
-        session.audioChunks.close()
-        discardQueuedAudio(session)
-        if (!recordingStoppedPublished) {
-            publishIfCurrent(session) { onRecordingStopped(session.generation) }
-        }
-        if (!consumerJoined) joinConsumer(session)
-        discardQueuedAudio(session)
-        cancelStream(session)
-        val delivered = publishTerminalServiceFailure(session)
-        if (!delivered) retireTerminalSession(session)
-    }
-
     private suspend fun cleanupActiveSession(
         session: Session,
         cancelRecorderResource: Boolean
@@ -556,23 +495,10 @@ class LocalSpeechController internal constructor(
             recorderSucceeded = cancelRecorder(session) == null
         }
         session.stopAudio()
-        session.audioChunks.close()
-        cancelAndJoinConsumer(session)
+        session.releaseBufferedAudio()
         cancelStream(session)
         session.terminal.set(true)
         return recorderSucceeded
-    }
-
-    private suspend fun cancelAndJoinConsumer(session: Session) {
-        session.consumerJob?.cancel()
-        joinConsumer(session)
-        discardQueuedAudio(session)
-    }
-
-    private suspend fun joinConsumer(session: Session) {
-        withContext(NonCancellable) {
-            listOfNotNull(session.consumerJob).joinAll()
-        }
     }
 
     private suspend fun cancelStream(session: Session): Throwable? {
@@ -606,14 +532,7 @@ class LocalSpeechController internal constructor(
             if (session != null) {
                 failure = combineFailures(failure, cancelRecorder(session))
                 session.stopAudio()
-                session.audioChunks.close()
-                session.consumerJob?.cancel()
-                try {
-                    joinConsumer(session)
-                } catch (consumerError: Throwable) {
-                    failure = combineFailures(failure, consumerError)
-                }
-                discardQueuedAudio(session)
+                session.releaseBufferedAudio()
                 failure = combineFailures(failure, cancelStream(session))
                 session.terminal.set(true)
             }
@@ -633,30 +552,17 @@ class LocalSpeechController internal constructor(
         }
     }
 
-    private fun discardQueuedAudio(session: Session) {
-        while (session.audioChunks.tryReceive().isSuccess) {
-            // Dropping references releases queued PCM immediately on terminal paths.
+    private suspend fun submitBufferedAudio(session: Session) {
+        val payload = checkNotNull(session.takeBufferedAudio()) {
+            "PCM buffer is unavailable"
         }
+        speechEngine.acceptSamples(payload.samples, payload.sampleCount)
     }
 
     private fun drainCallbackDeliveries() {
         while (true) {
             val delivery = callbackDeliveries.tryReceive().getOrNull() ?: return
             delivery.result.complete(false)
-        }
-    }
-
-    private fun prepareDecodeFailure(session: Session) {
-        callbackGate.withLock {
-            synchronized(stateLock) {
-                if (!isCurrentLocked(session) || session.terminal.get()) return
-                session.stopClaimed = true
-                session.stopPartialsLocked()
-                timeoutJob?.cancel()
-                timeoutJob = null
-            }
-            session.stopAudio()
-            session.audioChunks.close()
         }
     }
 
@@ -844,7 +750,7 @@ class LocalSpeechController internal constructor(
     }
 
     private class Session(val generation: Long) {
-        val audioChunks = Channel<ShortArray>(Channel.UNLIMITED)
+        private val pcmBuffer = PcmSessionBuffer()
         val createdDelivery = CompletableDeferred<Boolean>()
         val deliveryToken = DeliveryToken()
         val valid = AtomicBoolean(true)
@@ -854,13 +760,21 @@ class LocalSpeechController internal constructor(
         val recorderCleanupClaimed = AtomicBoolean(false)
         val streamActive = AtomicBoolean(false)
         val terminal = AtomicBoolean(false)
-        val consumerFailure = AtomicReference<Throwable?>()
-        var consumerJob: Job? = null
         var stopClaimed = false
 
         fun acceptsAudio(): Boolean = valid.get() && audioAllowed.get()
 
         fun acceptsPartials(): Boolean = valid.get() && partialsAllowed.get()
+
+        fun appendAudio(samples: ShortArray) {
+            pcmBuffer.append(samples)
+        }
+
+        fun takeBufferedAudio(): BufferedPcm? = pcmBuffer.take()
+
+        fun releaseBufferedAudio() {
+            pcmBuffer.release()
+        }
 
         fun stopAudio() {
             audioAllowed.set(false)
@@ -928,7 +842,6 @@ class LocalSpeechController internal constructor(
     private sealed interface Command {
         data class Start(val session: Session) : Command
         data class Stop(val session: Session) : Command
-        data class DecodeFailed(val session: Session) : Command
         data object Cancel : Command
     }
 

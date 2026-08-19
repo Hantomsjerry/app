@@ -24,14 +24,16 @@ import kotlinx.coroutines.withContext
 interface StreamingSpeechEngine : AutoCloseable {
     suspend fun prepare()
     suspend fun startSession(onPartialText: (String) -> Unit)
-    suspend fun acceptSamples(samples: ShortArray)
+    suspend fun acceptSamples(samples: ShortArray, sampleCount: Int = samples.size)
     suspend fun finishSession(): String
     suspend fun cancelSession()
     override fun close()
 }
 
-fun pcm16ToFloat(samples: ShortArray): FloatArray =
-    FloatArray(samples.size) { index -> samples[index] / 32768.0f }
+fun pcm16ToFloat(samples: ShortArray, sampleCount: Int = samples.size): FloatArray {
+    require(sampleCount in 0..samples.size) { "Invalid PCM sample count: $sampleCount" }
+    return FloatArray(sampleCount) { index -> samples[index] / 32768.0f }
+}
 
 internal fun interface SherpaRecognizerFactory {
     fun create(files: SherpaOnnxModelFiles): SherpaRecognizerApi
@@ -121,12 +123,12 @@ class SherpaOnnxStreamingEngine internal constructor(
         }
     }
 
-    override suspend fun acceptSamples(samples: ShortArray) {
+    override suspend fun acceptSamples(samples: ShortArray, sampleCount: Int) {
         val deliveries = stateMutex.withLock {
             ensureOpen()
             val session = requireActiveSession()
             withContext(dispatcher) {
-                session.stream.acceptWaveform(pcm16ToFloat(samples), SAMPLE_RATE)
+                session.stream.acceptWaveform(pcm16ToFloat(samples, sampleCount), SAMPLE_RATE)
                 drainRecognizer(session)
             }
         }
@@ -140,7 +142,6 @@ class SherpaOnnxStreamingEngine internal constructor(
             var primaryFailure: Throwable? = null
             try {
                 withContext(dispatcher + NonCancellable) {
-                    session.stream.acceptWaveform(FloatArray(FINAL_TAIL_SAMPLES), SAMPLE_RATE)
                     session.stream.inputFinished()
                     val deliveries = drainRecognizer(session)
                     FinishResult(
@@ -385,7 +386,6 @@ class SherpaOnnxStreamingEngine internal constructor(
 
     private companion object {
         const val SAMPLE_RATE = 16_000
-        const val FINAL_TAIL_SAMPLES = 12_800
         const val PARTIAL_INTERVAL_MILLIS = 100L
     }
 }

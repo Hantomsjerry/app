@@ -92,6 +92,8 @@ import com.example.myapp.communication.TcpParameterClient
 import com.example.myapp.communication.validateTcpEndpoint
 import com.example.myapp.ui.theme.MyAppTheme
 import com.example.myapp.voice.AndroidPcmRecorder
+import com.example.myapp.voice.AndroidIcuPinyinEncoder
+import com.example.myapp.voice.FuzzyTranscriptCorrector
 import com.example.myapp.voice.LocalSpeechController
 import com.example.myapp.voice.NativeQwenInferenceEngine
 import com.example.myapp.voice.ParameterValue
@@ -100,6 +102,7 @@ import com.example.myapp.voice.QwenModelStore
 import com.example.myapp.voice.SenseVoiceModelStore
 import com.example.myapp.voice.SenseVoiceSpeechEngine
 import com.example.myapp.voice.SetParameterCommand
+import com.example.myapp.voice.SpeechCorrectionDictionary
 import com.example.myapp.voice.SpeechRecognizerStatus
 import com.example.myapp.voice.VoiceCommandCodec
 import com.example.myapp.voice.VoiceEvent
@@ -182,6 +185,9 @@ fun DetectionParametersScreen() {
     val voiceIntentParser = remember(qwenEngine) { VoiceIntentParser(qwenEngine) }
     val speechModelStore = remember(applicationContext) { SenseVoiceModelStore(applicationContext) }
     val speechEngine = remember(speechModelStore) { SenseVoiceSpeechEngine(speechModelStore) }
+    val transcriptCorrector = remember {
+        FuzzyTranscriptCorrector(SpeechCorrectionDictionary.lexemes, AndroidIcuPinyinEncoder())
+    }
     val pcmRecorder = remember { AndroidPcmRecorder() }
 
     var host by rememberSaveable { mutableStateOf(savedEndpoint?.host.orEmpty()) }
@@ -255,10 +261,11 @@ fun DetectionParametersScreen() {
     }
 
     // 控制器持有自己的协程作用域；回调回到主线程后再驱动 Compose 状态。
-    val localSpeechController = remember(pcmRecorder, speechEngine) {
+    val localSpeechController = remember(pcmRecorder, speechEngine, transcriptCorrector) {
         LocalSpeechController(
             pcmRecorder = pcmRecorder,
             speechEngine = speechEngine,
+            correctTranscript = transcriptCorrector::correct,
             onSessionCreated = { controllerGeneration ->
                 val generation = voiceGenerationTracker.begin(controllerGeneration)
                 dispatchVoiceEvent(VoiceEvent.NewSession(generation))
@@ -281,12 +288,14 @@ fun DetectionParametersScreen() {
                     dispatchVoiceEvent(VoiceEvent.RecordingStopped(generation))
                 }
             },
-            onFinalText = { result ->
+            onFinalResult = { result ->
                 val generation = voiceGenerationTracker.resolve(result.generation)
                 if (generation != null) {
                     val wasTranscribing =
                         (voiceUiState as? VoiceUiState.Transcribing)?.generation == generation
-                    dispatchVoiceEvent(VoiceEvent.FinalText(generation, result.text))
+                    dispatchVoiceEvent(
+                        VoiceEvent.FinalText(generation, result.correction.correctedText)
+                    )
                     if (!wasTranscribing ||
                         (voiceUiState as? VoiceUiState.Parsing)?.generation != generation
                     ) {
@@ -296,7 +305,7 @@ fun DetectionParametersScreen() {
                     voiceParseJob = coroutineScope.launch {
                         dispatchVoiceEvent(VoiceEvent.ModelPreparationStarted(generation))
                         val parseResult = withContext(Dispatchers.Default) {
-                            voiceIntentParser.parse(result.text)
+                            voiceIntentParser.parse(result.correction.correctedText)
                         }
                         // 推理完成时会话可能已被替换，旧结果绝不能生成新的候选指令。
                         if (!isActive || !voiceGenerationTracker.isCurrent(generation)) {

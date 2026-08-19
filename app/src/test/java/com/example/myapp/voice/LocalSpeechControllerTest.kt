@@ -178,12 +178,12 @@ class LocalSpeechControllerTest {
         val recorder = FakeRecorder()
         val engine = FakeStreamingEngine(result = "Lv2强度调到60")
         val attempts = mutableListOf<SpeechFinalizationAttemptSource>()
-        val finals = mutableListOf<SpeechRecognitionText>()
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val controller = controller(
             recorder = recorder,
             engine = engine,
             finalizationAttemptObserver = SpeechFinalizationAttemptObserver(attempts::add),
-            onFinalText = finals::add
+            onFinalResult = finals::add
         )
 
         val generation = controller.start()
@@ -199,7 +199,8 @@ class LocalSpeechControllerTest {
         assertEquals(listOf(SpeechFinalizationAttemptSource.Manual), attempts)
         assertEquals(1, recorder.stopCalls)
         assertEquals(1, engine.finishCalls)
-        assertEquals(SpeechRecognitionText(generation, "Lv2强度调到60"), finals.single())
+        assertEquals(generation, finals.single().generation)
+        assertEquals("Lv2强度调到60", finals.single().correction.correctedText)
     }
 
     @Test
@@ -248,8 +249,8 @@ class LocalSpeechControllerTest {
     fun staleQueuedStopCannotFinalizeReplacementGeneration() = runTest {
         val recorder = FakeRecorder()
         val engine = FakeStreamingEngine()
-        val finals = mutableListOf<SpeechRecognitionText>()
-        val controller = controller(recorder, engine, onFinalText = finals::add)
+        val finals = mutableListOf<SpeechRecognitionResult>()
+        val controller = controller(recorder, engine, onFinalResult = finals::add)
 
         val staleGeneration = controller.start()
         runCurrent()
@@ -529,12 +530,12 @@ class LocalSpeechControllerTest {
         })
         val errors = mutableListOf<SpeechRecognitionFailure>()
         val recordingGenerations = mutableListOf<Long>()
-        val finals = mutableListOf<SpeechRecognitionText>()
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val controller = controller(
             recorder,
             engine,
             onRecordingStarted = recordingGenerations::add,
-            onFinalText = finals::add,
+            onFinalResult = finals::add,
             onError = errors::add
         )
 
@@ -565,12 +566,12 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun finalTextIsNormalizedBeforeDelivery() = runTest {
-        val finals = mutableListOf<SpeechRecognitionText>()
+    fun finalResultPreservesRawTextBeforeCorrection() = runTest {
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val controller = controller(
             FakeRecorder(),
             FakeStreamingEngine(result = "set l v 1 sensitivity to 32"),
-            onFinalText = finals::add
+            onFinalResult = finals::add
         )
 
         val generation = controller.start()
@@ -578,10 +579,9 @@ class LocalSpeechControllerTest {
         controller.stopAndTranscribe()
         runCurrent()
 
-        assertEquals(
-            listOf(SpeechRecognitionText(generation, "set Lv1 sensitivity to 32")),
-            finals
-        )
+        assertEquals(generation, finals.single().generation)
+        assertEquals("set l v 1 sensitivity to 32", finals.single().correction.rawText)
+        assertEquals("set l v 1 sensitivity to 32", finals.single().correction.correctedText)
     }
 
     @Test
@@ -753,11 +753,11 @@ class LocalSpeechControllerTest {
 
     @Test
     fun nonblankFinalIsTrimmed() = runTest {
-        val finals = mutableListOf<SpeechRecognitionText>()
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val controller = controller(
             FakeRecorder(),
             FakeStreamingEngine(result = "  recognized text \n"),
-            onFinalText = finals::add
+            onFinalResult = finals::add
         )
 
         val generation = controller.start()
@@ -765,7 +765,112 @@ class LocalSpeechControllerTest {
         controller.stopAndTranscribe()
         runCurrent()
 
-        assertEquals(SpeechRecognitionText(generation, "recognized text"), finals.single())
+        assertEquals("recognized text", finals.single().correction.rawText)
+        assertEquals("recognized text", finals.single().correction.correctedText)
+        assertEquals(generation, finals.single().generation)
+    }
+
+    @Test
+    fun finalResultContainsRawAndCorrectedText() = runTest {
+        val finals = mutableListOf<SpeechRecognitionResult>()
+        val controller = controller(
+            FakeRecorder(),
+            FakeStreamingEngine(result = "将绿二强度调到六十"),
+            correct = { raw -> correction(raw, "将Lv2强度调到60") },
+            onFinalResult = finals::add
+        )
+
+        val generation = controller.start()
+        runCurrent()
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        assertEquals(
+            SpeechRecognitionResult(
+                generation,
+                correction("将绿二强度调到六十", "将Lv2强度调到60")
+            ),
+            finals.single()
+        )
+    }
+
+    @Test
+    fun ambiguousCorrectionIsDeliveredToTheConsumer() = runTest {
+        val finals = mutableListOf<SpeechRecognitionResult>()
+        val controller = controller(
+            FakeRecorder(),
+            FakeStreamingEngine(result = "模糊命令"),
+            correct = { raw -> correction(raw, "模糊命令", ambiguous = true) },
+            onFinalResult = finals::add
+        )
+
+        controller.start()
+        runCurrent()
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        assertTrue(finals.single().correction.ambiguous)
+    }
+
+    @Test
+    fun correctionFailureMapsToServiceError() = runTest {
+        val errors = mutableListOf<SpeechRecognitionFailure>()
+        val controller = controller(
+            FakeRecorder(),
+            FakeStreamingEngine(result = "recognized"),
+            correct = { throw IllegalStateException("correction") },
+            onError = errors::add
+        )
+
+        val generation = controller.start()
+        runCurrent()
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        assertEquals(
+            SpeechRecognitionFailure(
+                generation,
+                SpeechRecognitionFailureType.Service,
+                "本地语音识别失败，请重试"
+            ),
+            errors.single()
+        )
+    }
+
+    @Test
+    fun finalCorrectionWritesRawCorrectedAmbiguityElapsedAndReplacementsToDebugLog() = runTest {
+        val logs = mutableListOf<String>()
+        val controller = controller(
+            FakeRecorder(),
+            FakeStreamingEngine(result = "将绿二强度调到六十"),
+            correct = { raw ->
+                correction(
+                    raw = raw,
+                    corrected = "将Lv2强度调到60",
+                    ambiguous = true,
+                    replacements = listOf(
+                        CorrectionReplacement(
+                            start = 1,
+                            endExclusive = 3,
+                            source = "绿二",
+                            replacement = "Lv2",
+                            score = 0.9f,
+                            reason = CorrectionReason.PINYIN
+                        )
+                    )
+                )
+            },
+            debugLog = logs::add
+        )
+
+        controller.start()
+        runCurrent()
+        controller.stopAndTranscribe()
+        runCurrent()
+
+        val log = logs.single()
+        assertTrue(log.startsWith("voice raw=将绿二强度调到六十 corrected=将Lv2强度调到60 ambiguous=true elapsedMs="))
+        assertTrue(log.contains("replacements=[CorrectionReplacement(start=1, endExclusive=3, source=绿二, replacement=Lv2, score=0.9, reason=PINYIN)]"))
     }
 
     @Test
@@ -815,7 +920,7 @@ class LocalSpeechControllerTest {
         val finishEntered = CompletableDeferred<Unit>()
         val finishRelease = CompletableDeferred<Unit>()
         val finishCalls = AtomicInteger()
-        val finals = mutableListOf<SpeechRecognitionText>()
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val engine = FakeStreamingEngine(finishBlock = {
             if (finishCalls.incrementAndGet() == 1) {
                 finishEntered.complete(Unit)
@@ -823,7 +928,7 @@ class LocalSpeechControllerTest {
             }
             "result"
         })
-        val controller = controller(FakeRecorder(), engine, onFinalText = finals::add)
+        val controller = controller(FakeRecorder(), engine, onFinalResult = finals::add)
 
         val staleGeneration = controller.start()
         runCurrent()
@@ -890,6 +995,7 @@ class LocalSpeechControllerTest {
             scope = CoroutineScope(parentJob + Dispatchers.Default),
             callbackDispatcher = Dispatchers.Default,
             timerDelay = { awaitCancellation() },
+            correctTranscript = { raw -> correction(raw, raw) },
             afterCallbackPermitBeforeEntry = {
                 hookEntered.countDown()
                 check(releaseHook.await(5, TimeUnit.SECONDS)) { "callback hook was not released" }
@@ -902,7 +1008,7 @@ class LocalSpeechControllerTest {
             onRecordingStarted = {},
             onPartialText = {},
             onRecordingStopped = {},
-            onFinalText = {},
+            onFinalResult = {},
             onError = {}
         )
         val invalidator = Thread {
@@ -1063,6 +1169,7 @@ class LocalSpeechControllerTest {
             scope = CoroutineScope(parentJob + Dispatchers.Default),
             callbackDispatcher = callbackDispatcher,
             timerDelay = { awaitCancellation() },
+            correctTranscript = { raw -> correction(raw, raw) },
             onSessionCreated = { callbacks += "created" },
             onRecordingStarted = {
                 callbacks += "recording"
@@ -1070,7 +1177,7 @@ class LocalSpeechControllerTest {
             },
             onPartialText = { callbacks += "partial" },
             onRecordingStopped = { callbacks += "stopped" },
-            onFinalText = { callbacks += "final" },
+            onFinalResult = { callbacks += "final" },
             onError = { callbacks += "error" }
         )
 
@@ -1255,7 +1362,7 @@ class LocalSpeechControllerTest {
             onRecordingStarted = { throw IllegalStateException("recording callback") },
             onPartialText = { throw IllegalStateException("partial callback") },
             onRecordingStopped = { throw IllegalStateException("stopped callback") },
-            onFinalText = { throw IllegalStateException("final callback") },
+            onFinalResult = { throw IllegalStateException("final callback") },
             onError = { throw IllegalStateException("error callback") }
         )
 
@@ -1277,14 +1384,14 @@ class LocalSpeechControllerTest {
     fun recordingStoppedCallbackCanStartReplacementWithoutDeadlockOrOldFinal() = runTest {
         val recorder = FakeRecorder()
         val engine = FakeStreamingEngine()
-        val finals = mutableListOf<SpeechRecognitionText>()
+        val finals = mutableListOf<SpeechRecognitionResult>()
         val replacements = mutableListOf<Long>()
         lateinit var controller: LocalSpeechController
         controller = controller(
             recorder,
             engine,
             onRecordingStopped = { replacements += controller.start() },
-            onFinalText = finals::add
+            onFinalResult = finals::add
         )
 
         controller.start()
@@ -1403,6 +1510,19 @@ class LocalSpeechControllerTest {
         return field.get(controller)
     }
 
+    private fun correction(
+        raw: String,
+        corrected: String,
+        ambiguous: Boolean = false,
+        replacements: List<CorrectionReplacement> = emptyList()
+    ) = CorrectionResult(
+        rawText = raw,
+        correctedText = corrected,
+        confidence = 1.0f,
+        ambiguous = ambiguous,
+        replacements = replacements
+    )
+
     private fun pcmBuffer(session: Any): PcmSessionBuffer {
         val field = session.javaClass.getDeclaredField("pcmBuffer")
         field.isAccessible = true
@@ -1450,8 +1570,10 @@ class LocalSpeechControllerTest {
             events += "partial:${it.generation}:${it.text}"
         },
         onRecordingStopped: (Long) -> Unit = { events += "stopped:$it" },
-        onFinalText: (SpeechRecognitionText) -> Unit = {
-            events += "final:${it.generation}:${it.text}"
+        correct: (String) -> CorrectionResult = { raw -> correction(raw, raw) },
+        debugLog: (String) -> Unit = {},
+        onFinalResult: (SpeechRecognitionResult) -> Unit = {
+            events += "final:${it.generation}:${it.correction.correctedText}"
         },
         onError: (SpeechRecognitionFailure) -> Unit = {
             events += "error:${it.generation}:${it.type}"
@@ -1465,12 +1587,13 @@ class LocalSpeechControllerTest {
         beforeCallbackDelivery = beforeCallbackDelivery,
         afterCallbackPermitBeforeEntry = afterCallbackPermitBeforeEntry,
         finalizationAttemptObserver = finalizationAttemptObserver,
-        transcriptNormalizer = SpeechTranscriptNormalizer::normalize,
+        correctTranscript = correct,
+        debugLog = debugLog,
         onSessionCreated = onSessionCreated,
         onRecordingStarted = onRecordingStarted,
         onPartialText = onPartialText,
         onRecordingStopped = onRecordingStopped,
-        onFinalText = onFinalText,
+        onFinalResult = onFinalResult,
         onError = onError
     )
 
@@ -1490,7 +1613,8 @@ class LocalSpeechControllerTest {
         onRecordingStarted = onRecordingStarted,
         onPartialText = onPartialText,
         onRecordingStopped = {},
-        onFinalText = {},
+        correctTranscript = { raw -> correction(raw, raw) },
+        onFinalResult = {},
         onError = {}
     )
 

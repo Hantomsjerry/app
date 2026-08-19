@@ -104,13 +104,13 @@ class MainActivitySpeechScopeTest {
         assertTrackerBeforeEvent(
             callbacks = callbacks,
             callbackName = "onRecordingStopped",
-            nextCallbackName = "onFinalText",
+            nextCallbackName = "onFinalResult",
             trackerCall = "voiceGenerationTracker.resolve",
             eventName = "VoiceEvent.RecordingStopped"
         )
         assertTrackerBeforeEvent(
             callbacks = callbacks,
-            callbackName = "onFinalText",
+            callbackName = "onFinalResult",
             nextCallbackName = "onError",
             trackerCall = "voiceGenerationTracker.resolve",
             eventName = "VoiceEvent.FinalText"

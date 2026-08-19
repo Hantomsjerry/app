@@ -45,12 +45,13 @@ class LocalSpeechController internal constructor(
     private val afterCallbackPermitBeforeEntry: () -> Unit = {},
     private val finalizationAttemptObserver: SpeechFinalizationAttemptObserver =
         SpeechFinalizationAttemptObserver.None,
-    private val transcriptNormalizer: (String) -> String = SpeechTranscriptNormalizer::normalize,
+    private val correctTranscript: (String) -> CorrectionResult,
+    private val debugLog: (String) -> Unit = {},
     private val onSessionCreated: (Long) -> Unit,
     private val onRecordingStarted: (Long) -> Unit,
     private val onPartialText: (SpeechRecognitionText) -> Unit,
     private val onRecordingStopped: (Long) -> Unit,
-    private val onFinalText: (SpeechRecognitionText) -> Unit,
+    private val onFinalResult: (SpeechRecognitionResult) -> Unit,
     private val onError: (SpeechRecognitionFailure) -> Unit
 ) : AutoCloseable {
     private val stateLock = Any()
@@ -399,20 +400,6 @@ class LocalSpeechController internal constructor(
         return true
     }
 
-    private fun publishPartial(session: Session, rawText: String) {
-        if (!session.acceptsPartials() || !isCurrent(session)) return
-        val text = transcriptNormalizer(rawText)
-        if (text.isBlank()) return
-        dispatchCallback(
-            session = session,
-            result = CompletableDeferred(),
-            isAllowed = { isCurrent(session) && session.acceptsPartials() },
-            callback = {
-                onPartialText(SpeechRecognitionText(session.generation, text))
-            }
-        )
-    }
-
     private suspend fun finalizeRecording(session: Session) {
         stopPartials(session)
         if (!session.claimRecorderCleanup()) return
@@ -453,9 +440,22 @@ class LocalSpeechController internal constructor(
             return
         }
 
-        val text = try {
+        val correction = try {
+            val recognitionStartedAtMs = System.currentTimeMillis()
             submitBufferedAudio(session)
-            transcriptNormalizer(speechEngine.finishSession().trim())
+            val rawText = speechEngine.finishSession().trim()
+            if (rawText.isBlank()) {
+                null
+            } else {
+                val elapsedMs = System.currentTimeMillis() - recognitionStartedAtMs
+                correctTranscript(rawText).also { result ->
+                    debugLog(
+                        "voice raw=$rawText corrected=${result.correctedText} " +
+                            "ambiguous=${result.ambiguous} elapsedMs=$elapsedMs " +
+                            "replacements=${result.replacements}"
+                    )
+                }
+            }
         } catch (cancellation: CancellationException) {
             session.releaseBufferedAudio()
             cancelStream(session)
@@ -471,7 +471,7 @@ class LocalSpeechController internal constructor(
         session.streamActive.set(false)
         session.terminal.set(true)
 
-        if (text.isBlank()) {
+        if (correction == null) {
             publishFailure(
                 session,
                 SpeechRecognitionFailureType.NoMatch,
@@ -479,7 +479,7 @@ class LocalSpeechController internal constructor(
             )
         } else {
             publishIfCurrent(session) {
-                onFinalText(SpeechRecognitionText(session.generation, text))
+                onFinalResult(SpeechRecognitionResult(session.generation, correction))
             }
         }
     }

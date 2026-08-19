@@ -6,6 +6,12 @@ data class SpeechRecognitionText(
     val text: String
 )
 
+/** One final offline recognition result, including the correction decision for its session. */
+data class SpeechRecognitionResult(
+    val generation: Long,
+    val correction: CorrectionResult
+)
+
 /** 供 UI 展示的稳定错误分类和中文信息，不泄露底层异常细节。 */
 data class SpeechRecognitionFailure(
     val generation: Long,

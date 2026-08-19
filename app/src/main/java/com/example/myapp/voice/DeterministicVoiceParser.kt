@@ -16,56 +16,6 @@ sealed interface DirectParseResult {
  * 信息不足时交给 Qwen，而不是猜测用户意图。
  */
 object DeterministicVoiceParser {
-    private val parameterAliases = mapOf(
-        VoiceParameter.lv1Sensitivity to listOf(
-            "lv1Sensitivity", "Lv1 sensitivity", "level 1 sensitivity",
-            "Lv1灵敏度", "Lv1 灵敏度", "Lv1敏感度", "Lv1 敏感度",
-            "\u4e00\u7ea7\u7075\u654f\u5ea6", "\u4e00\u7ea7\u654f\u611f\u5ea6"
-        ),
-        VoiceParameter.lv1Strength to listOf(
-            "lv1Strength", "Lv1 strength", "level 1 strength", "Lv1强度", "Lv1 强度",
-            "\u4e00\u7ea7\u5f3a\u5ea6"
-        ),
-        VoiceParameter.lv1Density to listOf(
-            "lv1Density", "Lv1 density", "level 1 density", "Lv1浓淡", "Lv1 浓淡",
-            "Lv1密度", "Lv1 密度", "\u4e00\u7ea7\u5bc6\u5ea6"
-        ),
-        VoiceParameter.enhancedInference to listOf(
-            "enhancedInference", "enhanced inference", "强化推理",
-            "\u589e\u5f3a\u63a8\u7406", "\u589e\u5f3a\u63a8\u65ad"
-        ),
-        VoiceParameter.lv1AreaMask to listOf(
-            "lv1AreaMask", "area mask", "\u533a\u57df\u63a9\u7801", "\u533a\u57df\u906e\u7f69", "\u533a\u57df\u5c4f\u853d"
-        ),
-        VoiceParameter.minArea to listOf(
-            "minArea", "min area", "minimum area", "\u6700\u5c0f\u9762\u79ef"
-        ),
-        VoiceParameter.template to listOf(
-            "template", "\u6a21\u677f"
-        ),
-        VoiceParameter.lv2Strength to listOf(
-            "lv2Strength", "Lv2 strength", "level 2 strength", "Lv2强度", "Lv2 强度",
-            "\u4e8c\u7ea7\u5f3a\u5ea6"
-        ),
-        VoiceParameter.lv3Strength to listOf(
-            "lv3Strength", "Lv3 strength", "level 3 strength", "Lv3强度", "Lv3 强度",
-            "\u4e09\u7ea7\u5f3a\u5ea6"
-        ),
-        VoiceParameter.actionDuration to listOf(
-            "actionDuration", "action duration", "\u52a8\u4f5c\u6301\u7eed\u65f6\u95f4", "\u52a8\u4f5c\u65f6\u957f"
-        ),
-        VoiceParameter.rejectDelay to listOf(
-            "rejectDelay", "reject delay", "剔除延时", "剔除延迟", "去除延时", "去除延迟", "剔除岩石",
-            "\u62d2\u7edd\u5ef6\u8fdf", "\u62d2\u7edd\u7b49\u5f85"
-        )
-    )
-
-    private val deviceAliases = mapOf(
-        MachineDevice.machine_1 to listOf("machine_1", "1\u53f7\u673a", "\u4e00\u53f7\u673a"),
-        MachineDevice.machine_2 to listOf("machine_2", "2\u53f7\u673a", "\u4e8c\u53f7\u673a"),
-        MachineDevice.machine_3 to listOf("machine_3", "3\u53f7\u673a", "\u4e09\u53f7\u673a")
-    )
-
     private val numericPattern = Regex("""(?<![a-z])[-+]?\d+(?:\.\d+)?(?![a-z])""")
     private val chineseIntegerPattern = Regex("[零〇一二两三四五六七八九十百千万]+")
     private val englishIntegerPattern = Regex(
@@ -214,7 +164,7 @@ object DeterministicVoiceParser {
 
     private fun startsWithControlledParameterAlias(text: String, index: Int): Boolean {
         val remainder = text.substring(index).trimStart()
-        return parameterAliases.keys.any { parameter ->
+        return VoiceParameter.values().any { parameter ->
             normalizedAliases(parameter).any { alias ->
                 remainder.startsWith(alias) &&
                     isBoundedAlias(remainder, 0, alias.length, alias)
@@ -381,7 +331,7 @@ object DeterministicVoiceParser {
             .map { range -> AliasOccurrence(parameter, range) }
 
     private fun findParameterOccurrences(matchingText: String): List<AliasOccurrence> =
-        parameterAliases.keys.flatMap { parameter ->
+        VoiceParameter.values().flatMap { parameter ->
             findAliasOccurrences(matchingText, parameter)
         }
 
@@ -429,7 +379,7 @@ object DeterministicVoiceParser {
         normalizedAliases(parameter)
             .sortedByDescending { it.length }
             .forEach { source = source.replace(it, " ") }
-        deviceAliases.values.flatten()
+        MachineDevice.values().flatMap(SpeechCorrectionDictionary::aliases)
             .flatMap { alias -> normalizedAliasForms(alias) }
             .sortedByDescending { it.length }
             .forEach { source = source.replace(it, " ") }
@@ -437,10 +387,10 @@ object DeterministicVoiceParser {
     }
 
     private fun normalizedAliases(parameter: VoiceParameter): List<String> =
-        parameterAliases.getValue(parameter).flatMap(::normalizedAliasForms).distinct()
+        SpeechCorrectionDictionary.aliases(parameter).flatMap(::normalizedAliasForms).distinct()
 
     private fun normalizedAliases(device: MachineDevice): List<String> =
-        deviceAliases.getValue(device).flatMap(::normalizedAliasForms).distinct()
+        SpeechCorrectionDictionary.aliases(device).flatMap(::normalizedAliasForms).distinct()
 
     private fun normalizedAliasForms(alias: String): List<String> {
         val normalized = matchingText(normalizePunctuation(alias))

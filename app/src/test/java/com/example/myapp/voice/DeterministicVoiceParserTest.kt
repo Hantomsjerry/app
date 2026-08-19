@@ -167,6 +167,20 @@ class DeterministicVoiceParserTest {
     }
 
     @Test
+    fun parsesCentralizedExistingAliasesWithoutChangingCommandBehavior() {
+        assertParsed(
+            transcript = "增强推断 打开",
+            parameter = VoiceParameter.enhancedInference,
+            value = ParameterValue.BooleanValue(true)
+        )
+        assertParsed(
+            transcript = "拒绝延迟调整到700",
+            parameter = VoiceParameter.rejectDelay,
+            value = ParameterValue.IntValue(700)
+        )
+    }
+
+    @Test
     fun doesNotTreatConversationalYiDianAsNumericValueOne() {
         assertEquals(
             DirectParseResult.NeedsModel,

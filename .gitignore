@@ -5,6 +5,7 @@
 /.kotlin/
 /.agents/
 /.superpowers/
+/.worktrees/
 .DS_Store
 /build
 **/build/

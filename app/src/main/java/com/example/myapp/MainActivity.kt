@@ -97,8 +97,8 @@ import com.example.myapp.voice.NativeQwenInferenceEngine
 import com.example.myapp.voice.ParameterValue
 import com.example.myapp.voice.ParameterVoiceUpdate
 import com.example.myapp.voice.QwenModelStore
-import com.example.myapp.voice.SherpaOnnxModelStore
-import com.example.myapp.voice.SherpaOnnxStreamingEngine
+import com.example.myapp.voice.SenseVoiceModelStore
+import com.example.myapp.voice.SenseVoiceSpeechEngine
 import com.example.myapp.voice.SetParameterCommand
 import com.example.myapp.voice.SpeechRecognizerStatus
 import com.example.myapp.voice.VoiceCommandCodec
@@ -180,8 +180,8 @@ fun DetectionParametersScreen() {
     val modelStore = remember(applicationContext) { QwenModelStore(applicationContext) }
     val qwenEngine = remember(modelStore) { NativeQwenInferenceEngine(modelStore) }
     val voiceIntentParser = remember(qwenEngine) { VoiceIntentParser(qwenEngine) }
-    val speechModelStore = remember(applicationContext) { SherpaOnnxModelStore(applicationContext) }
-    val speechEngine = remember(speechModelStore) { SherpaOnnxStreamingEngine(speechModelStore) }
+    val speechModelStore = remember(applicationContext) { SenseVoiceModelStore(applicationContext) }
+    val speechEngine = remember(speechModelStore) { SenseVoiceSpeechEngine(speechModelStore) }
     val pcmRecorder = remember { AndroidPcmRecorder() }
 
     var host by rememberSaveable { mutableStateOf(savedEndpoint?.host.orEmpty()) }

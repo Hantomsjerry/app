@@ -112,7 +112,7 @@ class SenseVoiceModelStoreTest {
     private fun testStore(
         sourceAssets: Map<String, ByteArray>,
         modelDirectory: File = File(temporaryFolder.root, "sense"),
-        manifests: List<SherpaOnnxModelStore.AssetManifest> = manifests(sourceAssets),
+        manifests: List<SenseVoiceModelStore.AssetManifest> = manifests(sourceAssets),
         openAsset: (String) -> InputStream = { path ->
             sourceAssets.getValue(path.substringAfterLast('/')).inputStream()
         },
@@ -125,7 +125,7 @@ class SenseVoiceModelStoreTest {
     )
 
     private fun manifests(sourceAssets: Map<String, ByteArray> = assets) = sourceAssets.map { (name, bytes) ->
-        SherpaOnnxModelStore.AssetManifest(
+        SenseVoiceModelStore.AssetManifest(
             assetPath = "test/$name",
             fileName = name,
             expectedBytes = bytes.size.toLong(),
@@ -140,7 +140,7 @@ class SenseVoiceModelStoreTest {
         expected
     }
 
-    private suspend fun assertManifestRejected(manifests: List<SherpaOnnxModelStore.AssetManifest>) {
+    private suspend fun assertManifestRejected(manifests: List<SenseVoiceModelStore.AssetManifest>) {
         try {
             testStore(assets, manifests = manifests).prepare()
             throw AssertionError("Expected invalid manifest to be rejected")

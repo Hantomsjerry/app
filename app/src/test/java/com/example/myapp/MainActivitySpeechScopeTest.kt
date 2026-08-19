@@ -12,8 +12,8 @@ class MainActivitySpeechScopeTest {
         val source = mainActivitySource()
 
         assertTrue(source.contains("LocalSpeechController"))
-        assertTrue(source.contains("SherpaOnnxStreamingEngine"))
-        assertTrue(source.contains("SherpaOnnxModelStore"))
+        assertTrue(source.contains("SenseVoiceSpeechEngine"))
+        assertTrue(source.contains("SenseVoiceModelStore"))
         assertFalse(source.contains("LocalWhisperController"))
         assertFalse(source.contains("NativeWhisperInferenceEngine"))
         assertFalse(source.contains("speechEngine.close()"))

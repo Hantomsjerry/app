@@ -21,7 +21,7 @@ data class SenseVoiceModelFiles(
 
 class SenseVoiceModelStore internal constructor(
     private val modelDirectory: File,
-    private val manifests: List<SherpaOnnxModelStore.AssetManifest>,
+    private val manifests: List<AssetManifest>,
     private val openAsset: (String) -> InputStream,
     private val calculateSha256: (File) -> String = ::sha256,
     private val publishAtomically: ((File, File) -> Unit)? = null,
@@ -34,11 +34,11 @@ class SenseVoiceModelStore internal constructor(
     )
 
     private val normalizedModelDirectory = modelDirectory.toPath().toAbsolutePath().normalize()
-    private val manifestsByFileName: Map<String, SherpaOnnxModelStore.AssetManifest>
+    private val manifestsByFileName: Map<String, AssetManifest>
 
     init {
         require(manifests.size == REQUIRED_FILE_COUNT) { "Expected $REQUIRED_FILE_COUNT SenseVoice model assets" }
-        val fileNames = manifests.map(SherpaOnnxModelStore.AssetManifest::fileName)
+        val fileNames = manifests.map(AssetManifest::fileName)
         require(fileNames.all(::isPlainFileName)) { "SenseVoice model asset names must be plain file names" }
         require(fileNames.toSet() == REQUIRED_FILE_NAMES) {
             "SenseVoice model manifest must contain each required asset exactly once"
@@ -48,7 +48,7 @@ class SenseVoiceModelStore internal constructor(
                 "SenseVoice model asset output escapes its model directory: ${manifest.fileName}"
             }
         }
-        manifestsByFileName = manifests.associateBy(SherpaOnnxModelStore.AssetManifest::fileName)
+        manifestsByFileName = manifests.associateBy(AssetManifest::fileName)
     }
 
     @Throws(ModelPreparationException::class)
@@ -76,7 +76,7 @@ class SenseVoiceModelStore internal constructor(
         }
     }
 
-    private fun prepareAsset(directory: File, manifest: SherpaOnnxModelStore.AssetManifest): File {
+    private fun prepareAsset(directory: File, manifest: AssetManifest): File {
         val finalFile = resolveOutputPath(directory.toPath().toAbsolutePath().normalize(), manifest.fileName).toFile()
         val partialFile = File(directory, "${manifest.fileName}.partial")
         if (isVerified(finalFile, manifest)) {
@@ -107,14 +107,14 @@ class SenseVoiceModelStore internal constructor(
         }
     }
 
-    private fun isVerified(file: File, manifest: SherpaOnnxModelStore.AssetManifest): Boolean = try {
+    private fun isVerified(file: File, manifest: AssetManifest): Boolean = try {
         file.isFile && file.length() == manifest.expectedBytes &&
             calculateSha256(file).equals(manifest.sha256, ignoreCase = true)
     } catch (_: Exception) {
         false
     }
 
-    private fun verify(file: File, manifest: SherpaOnnxModelStore.AssetManifest) {
+    private fun verify(file: File, manifest: AssetManifest) {
         if (file.length() != manifest.expectedBytes) {
             throw ModelPreparationException(
                 "SenseVoice model asset ${manifest.fileName} length mismatch: expected " +
@@ -168,6 +168,13 @@ class SenseVoiceModelStore internal constructor(
         return outputPath
     }
 
+    data class AssetManifest(
+        val assetPath: String,
+        val fileName: String,
+        val expectedBytes: Long,
+        val sha256: String
+    )
+
     companion object {
         const val MODEL_DIRECTORY = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
         const val MODEL_EXPECTED_BYTES = 239_233_841L
@@ -182,13 +189,13 @@ class SenseVoiceModelStore internal constructor(
         private val preparationLocks = ConcurrentHashMap<Path, Mutex>()
 
         val ASSET_MANIFESTS = listOf(
-            SherpaOnnxModelStore.AssetManifest(
+            AssetManifest(
                 assetPath = "$ASSET_DIRECTORY/$MODEL_FILE_NAME",
                 fileName = MODEL_FILE_NAME,
                 expectedBytes = MODEL_EXPECTED_BYTES,
                 sha256 = MODEL_SHA256
             ),
-            SherpaOnnxModelStore.AssetManifest(
+            AssetManifest(
                 assetPath = "$ASSET_DIRECTORY/$TOKENS_FILE_NAME",
                 fileName = TOKENS_FILE_NAME,
                 expectedBytes = 315_894L,

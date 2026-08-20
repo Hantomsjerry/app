@@ -296,7 +296,7 @@ class LocalSpeechControllerTest {
     }
 
     @Test
-    fun recorderBuffersFirstAudioWhileOnlineStreamIsBeingCreated() = runTest {
+    fun recorderBuffersFirstAudioWhileOfflineStreamIsBeingCreated() = runTest {
         val streamCreationEntered = CompletableDeferred<Unit>()
         val releaseStreamCreation = CompletableDeferred<Unit>()
         val firstChunk = ShortArray(PcmRecordingPolicy.MIN_SAMPLES) { 7 }

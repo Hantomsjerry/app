@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -266,6 +267,7 @@ fun DetectionParametersScreen() {
             pcmRecorder = pcmRecorder,
             speechEngine = speechEngine,
             correctTranscript = transcriptCorrector::correct,
+            debugLog = { message -> Log.d("LocalSpeechController", message) },
             onSessionCreated = { controllerGeneration ->
                 val generation = voiceGenerationTracker.begin(controllerGeneration)
                 dispatchVoiceEvent(VoiceEvent.NewSession(generation))
@@ -291,6 +293,15 @@ fun DetectionParametersScreen() {
             onFinalResult = { result ->
                 val generation = voiceGenerationTracker.resolve(result.generation)
                 if (generation != null) {
+                    if (result.correction.ambiguous) {
+                        dispatchVoiceEvent(
+                            VoiceEvent.RecognitionFailed(
+                                generation,
+                                "\u6307\u4ee4\u5b58\u5728\u6b67\u4e49"
+                            )
+                        )
+                        return@LocalSpeechController
+                    }
                     val wasTranscribing =
                         (voiceUiState as? VoiceUiState.Transcribing)?.generation == generation
                     dispatchVoiceEvent(

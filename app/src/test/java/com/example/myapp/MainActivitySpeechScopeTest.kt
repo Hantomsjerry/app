@@ -124,6 +124,45 @@ class MainActivitySpeechScopeTest {
         )
     }
 
+    @Test
+    fun ambiguousCorrectionStopsBeforeModelPreparationAndParsing() {
+        val callback = fragmentBetween(
+            controllerConstruction(),
+            "onFinalResult = {",
+            "onError = {"
+        )
+        val ambiguityCheck = requiredIndex(callback, "if (result.correction.ambiguous)")
+        val recognitionFailure = requiredIndex(callback, "VoiceEvent.RecognitionFailed")
+        val finalText = requiredIndex(callback, "VoiceEvent.FinalText")
+        val modelPreparation = requiredIndex(callback, "VoiceEvent.ModelPreparationStarted")
+        val parser = requiredIndex(callback, "voiceIntentParser.parse")
+        val gate = callback.substring(ambiguityCheck, finalText)
+
+        assertTrue(ambiguityCheck < recognitionFailure)
+        assertTrue(recognitionFailure < finalText)
+        assertTrue(finalText < modelPreparation)
+        assertTrue(modelPreparation < parser)
+        assertTrue(gate.contains("\\u6307\\u4ee4\\u5b58\\u5728\\u6b67\\u4e49"))
+        assertTrue(gate.contains("return@LocalSpeechController"))
+    }
+
+    @Test
+    fun productionControllerForwardsCorrectionDebugLogsToAndroidLog() {
+        val source = mainActivitySource()
+        val construction = fragmentBetween(
+            source,
+            "val localSpeechController",
+            "onSessionCreated"
+        )
+
+        assertTrue(source.contains("import android.util.Log"))
+        assertTrue(
+            construction.contains(
+                "debugLog = { message -> Log.d(\"LocalSpeechController\", message) }"
+            )
+        )
+    }
+
     private fun assertTrackerBeforeEvent(
         callbacks: String,
         callbackName: String,

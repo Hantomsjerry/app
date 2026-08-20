@@ -2,6 +2,7 @@ package com.example.myapp.voice
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -73,6 +74,38 @@ class VoiceUiStateTest {
             VoiceUiState.Parsing(3, transcript()),
             reduceVoiceState(VoiceUiState.Transcribing(3), finalResult)
         )
+    }
+
+    @Test
+    fun acceptedFinalResultProvidesOnlyCorrectedTextForParsing() {
+        val finalResult = VoiceEvent.FinalResult(3, transcript(), ambiguous = false)
+        val previousState = VoiceUiState.Transcribing(3)
+        val nextState = reduceVoiceState(previousState, finalResult)
+
+        assertEquals(
+            transcript().corrected,
+            correctedTextForAcceptedFinalResult(previousState, nextState, finalResult)
+        )
+    }
+
+    @Test
+    fun duplicateSameGenerationFinalResultDoesNotProvideParserInput() {
+        val finalResult = VoiceEvent.FinalResult(3, transcript(), ambiguous = false)
+        val previousState = VoiceUiState.Parsing(3, transcript())
+        val nextState = reduceVoiceState(previousState, finalResult)
+
+        assertSame(previousState, nextState)
+        assertNull(correctedTextForAcceptedFinalResult(previousState, nextState, finalResult))
+    }
+
+    @Test
+    fun staleFinalResultDoesNotProvideParserInput() {
+        val finalResult = VoiceEvent.FinalResult(4, transcript(), ambiguous = false)
+        val previousState = VoiceUiState.Transcribing(5)
+        val nextState = reduceVoiceState(previousState, finalResult)
+
+        assertSame(previousState, nextState)
+        assertNull(correctedTextForAcceptedFinalResult(previousState, nextState, finalResult))
     }
 
     @Test

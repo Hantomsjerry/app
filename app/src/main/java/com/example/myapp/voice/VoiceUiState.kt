@@ -142,6 +142,23 @@ fun reduceVoiceState(state: VoiceUiState, event: VoiceEvent): VoiceUiState {
     }
 }
 
+internal fun correctedTextForAcceptedFinalResult(
+    previousState: VoiceUiState,
+    nextState: VoiceUiState,
+    finalResult: VoiceEvent.FinalResult
+): String? {
+    if (previousState !is VoiceUiState.Transcribing ||
+        previousState.generation != finalResult.generation
+    ) {
+        return null
+    }
+    val parsingState = nextState as? VoiceUiState.Parsing ?: return null
+    return finalResult.transcript.corrected.takeIf {
+        parsingState.generation == finalResult.generation &&
+            parsingState.transcript == finalResult.transcript
+    }
+}
+
 private fun VoiceUiState.generationOrNull(): Long? = when (this) {
     VoiceUiState.Idle -> null
     is VoiceUiState.PreparingSpeechModel -> generation

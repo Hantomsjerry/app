@@ -113,6 +113,7 @@ import com.example.myapp.voice.VoiceMicrophoneAction
 import com.example.myapp.voice.VoiceTranscript
 import com.example.myapp.voice.VoiceTranscriptLines
 import com.example.myapp.voice.VoiceUiState
+import com.example.myapp.voice.correctedTextForAcceptedFinalResult
 import com.example.myapp.voice.microphoneActionFor
 import com.example.myapp.voice.microphoneEnabledFor
 import com.example.myapp.voice.reduceVoiceState
@@ -306,16 +307,21 @@ fun DetectionParametersScreen() {
                         ),
                         ambiguous = result.correction.ambiguous
                     )
+                    val previousVoiceState = voiceUiState
                     dispatchVoiceEvent(finalResult)
-                    val parsing = voiceUiState as? VoiceUiState.Parsing
-                    if (parsing?.generation != generation) {
+                    val parserInput = correctedTextForAcceptedFinalResult(
+                        previousState = previousVoiceState,
+                        nextState = voiceUiState,
+                        finalResult = finalResult
+                    )
+                    if (parserInput == null) {
                         return@LocalSpeechController
                     }
                     voiceParseJob?.cancel()
                     voiceParseJob = coroutineScope.launch {
                         dispatchVoiceEvent(VoiceEvent.ModelPreparationStarted(generation))
                         val parseResult = withContext(Dispatchers.Default) {
-                            voiceIntentParser.parse(result.correction.correctedText)
+                            voiceIntentParser.parse(parserInput)
                         }
                         // 推理完成时会话可能已被替换，旧结果绝不能生成新的候选指令。
                         if (!isActive || !voiceGenerationTracker.isCurrent(generation)) {

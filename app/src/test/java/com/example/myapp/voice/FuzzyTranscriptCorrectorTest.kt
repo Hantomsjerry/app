@@ -13,7 +13,7 @@ class FuzzyTranscriptCorrectorTest {
     fun correctsObservedLv2AndRejectDelayErrorsAcrossSentence() {
         val result = corrector.correct("把二号几的绿二强度调到60并把剔除岩石改成700")
 
-        assertEquals("把machine_2的Lv2强度调到60并把剔除延时改成700", result.correctedText)
+        assertEquals("把machine_2的Lv2强度调到60并把剔除延时设置700", result.correctedText)
         assertFalse(result.ambiguous)
         assertTrue(result.replacements.size >= 3)
         assertTrue(result.replacements.any { it.reason == CorrectionReason.EXACT_ALIAS })
@@ -147,9 +147,67 @@ class FuzzyTranscriptCorrectorTest {
     fun correctsMixedChineseAndEnglishForms() {
         val result = corrector.correct("machine too的绿二强度改成80")
 
-        assertEquals("machine_2的Lv2强度改成80", result.correctedText)
+        assertEquals("machine_2的Lv2强度设置80", result.correctedText)
         assertFalse(result.ambiguous)
-        assertEquals(2, result.replacements.size)
+        assertEquals(3, result.replacements.size)
+    }
+
+    @Test
+    fun correctsOpenAndCloseEnhancedInferenceIntoParseableBooleanCommands() {
+        listOf(
+            Triple("open enhanced inference", "打开 强化推理", true),
+            Triple("close enhanced inference", "关闭 强化推理", false)
+        ).forEach { (raw, corrected, enabled) ->
+            val result = corrector.correct(raw)
+
+            assertEquals(corrected, result.correctedText)
+            assertFalse(result.ambiguous)
+            assertEquals(
+                DirectParseResult.Parsed(
+                    SetParameterCommand(
+                        action = "SET_PARAMETER",
+                        device = MachineDevice.machine_1,
+                        parameter = VoiceParameter.enhancedInference,
+                        value = ParameterValue.BooleanValue(enabled)
+                    )
+                ),
+                DeterministicVoiceParser.parse(result.correctedText)
+            )
+        }
+    }
+
+    @Test
+    fun correctsApprovedTemplateAsrSurfaceBeforeParsing() {
+        val result = corrector.correct("set template to 400 mm base engine")
+
+        assertEquals("设置 模板 to 400mmBase.engine", result.correctedText)
+        assertFalse(result.ambiguous)
+        assertEquals(
+            DirectParseResult.Parsed(
+                SetParameterCommand(
+                    action = "SET_PARAMETER",
+                    device = MachineDevice.machine_1,
+                    parameter = VoiceParameter.template,
+                    value = ParameterValue.StringValue("400mmBase.engine")
+                )
+            ),
+            DeterministicVoiceParser.parse(result.correctedText)
+        )
+    }
+
+    @Test
+    fun ambiguousBooleanCorrectionRemainsBlocked() {
+        val enhancedInference = SpeechCorrectionDictionary.lexemes.single {
+            it.category == CorrectionCategory.PARAMETER &&
+                it.canonical == VoiceParameter.enhancedInference.wireName
+        }
+        val result = correctorWithEntries(
+            CorrectionLexeme("true", setOf("toggle"), CorrectionCategory.BOOLEAN, "打开"),
+            CorrectionLexeme("false", setOf("toggle"), CorrectionCategory.BOOLEAN, "关闭"),
+            enhancedInference
+        ).correct("toggle enhanced inference")
+
+        assertTrue(result.ambiguous)
     }
 
     @Test
@@ -160,6 +218,45 @@ class FuzzyTranscriptCorrectorTest {
         assertEquals(1.0f, result.confidence)
         assertFalse(result.ambiguous)
         assertTrue(result.replacements.toString(), result.replacements.isEmpty())
+    }
+
+    @Test
+    fun twentySecondTranscriptKeepsEncoderWorkWithinDictionaryLengthBounds() {
+        val transcript = CharArray(20 * 15) { offset -> (0x6000 + offset).toChar() }
+            .concatToString()
+        val boundedDictionary = (0 until 24).map { index ->
+            val surface = "term${index.toString().padStart(2, '0')}abcdef"
+            CorrectionLexeme(surface, setOf(surface), CorrectionCategory.PARAMETER)
+        }
+        val normalizedLengths = boundedDictionary.flatMap { lexeme ->
+            (lexeme.aliases + lexeme.canonical + lexeme.preferredReplacement).map { alias ->
+                alias.lowercase(Locale.ROOT).count(Char::isLetterOrDigit)
+            }
+        }
+        val minimumCandidateLength = maxOf(1, normalizedLengths.min() - 2)
+        val maximumCandidateLength = normalizedLengths.max() + 2
+        val candidateSpanBound = transcript.indices.sumOf { start ->
+            val longest = minOf(maximumCandidateLength, transcript.length - start)
+            if (longest < minimumCandidateLength) 0 else longest - minimumCandidateLength + 1
+        }
+        val preparationCallBound = boundedDictionary.sumOf { lexeme ->
+            (lexeme.aliases + lexeme.canonical + lexeme.preferredReplacement).size
+        }
+        val encoderCallBound = preparationCallBound + candidateSpanBound
+        var encoderCalls = 0
+        val countingEncoder = PinyinEncoder { text ->
+            encoderCalls++
+            if (encoderCalls > encoderCallBound) {
+                throw AssertionError(
+                    "encoder work exceeded structural bound: calls=$encoderCalls bound=$encoderCallBound"
+                )
+            }
+            text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+        }
+
+        FuzzyTranscriptCorrector(boundedDictionary, countingEncoder).correct(transcript)
+
+        assertTrue("calls=$encoderCalls bound=$encoderCallBound", encoderCalls <= encoderCallBound)
     }
 
     @Test

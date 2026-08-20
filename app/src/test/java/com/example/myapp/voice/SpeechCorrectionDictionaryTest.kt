@@ -51,6 +51,58 @@ class SpeechCorrectionDictionaryTest {
     }
 
     @Test
+    fun coversApprovedActionBooleanAndTemplateSemantics() {
+        val semanticLexemes = SpeechCorrectionDictionary.lexemes
+            .filter { it.category in setOf(
+                CorrectionCategory.ACTION,
+                CorrectionCategory.BOOLEAN,
+                CorrectionCategory.TEMPLATE
+            ) }
+            .associate { (it.category to it.canonical) to it.preferredReplacement }
+
+        assertEquals(
+            mapOf(
+                (CorrectionCategory.ACTION to "SET_PARAMETER") to "设置",
+                (CorrectionCategory.BOOLEAN to "true") to "打开",
+                (CorrectionCategory.BOOLEAN to "false") to "关闭",
+                (CorrectionCategory.TEMPLATE to "400mmBase.engine") to "400mmBase.engine"
+            ),
+            semanticLexemes
+        )
+    }
+
+    @Test
+    fun containsRealisticActionBooleanAndTemplateAliases() {
+        val aliasesBySemantic = SpeechCorrectionDictionary.lexemes
+            .associate { (it.category to it.canonical) to it.aliases }
+
+        assertTrue(
+            aliasesBySemantic.getValue(CorrectionCategory.ACTION to "SET_PARAMETER")
+                .containsAll(setOf("设置", "设为", "调整", "修改", "set", "change", "adjust"))
+        )
+        assertTrue(
+            aliasesBySemantic.getValue(CorrectionCategory.BOOLEAN to "true")
+                .containsAll(setOf("开启", "打开", "启用", "on", "true", "open", "enable"))
+        )
+        assertTrue(
+            aliasesBySemantic.getValue(CorrectionCategory.BOOLEAN to "false")
+                .containsAll(setOf("关闭", "关掉", "禁用", "off", "false", "close", "disable"))
+        )
+        assertTrue(
+            aliasesBySemantic.getValue(CorrectionCategory.TEMPLATE to "400mmBase.engine")
+                .containsAll(
+                    setOf(
+                        "400mmBase.engine",
+                        "400 mm base engine",
+                        "400mm base engine",
+                        "400 millimeter base engine",
+                        "四百毫米基础引擎"
+                    )
+                )
+        )
+    }
+
+    @Test
     fun exposesDeterministicPreferredReplacementSurfaces() {
         val preferredByCanonical = SpeechCorrectionDictionary.lexemes
             .associate { it.canonical to it.preferredReplacement }

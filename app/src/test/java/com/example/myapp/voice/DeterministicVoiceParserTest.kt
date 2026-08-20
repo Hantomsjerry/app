@@ -142,6 +142,47 @@ class DeterministicVoiceParserTest {
     }
 
     @Test
+    fun rejectsEnglishHundredChainThatWrapsIntoAllowedRange() {
+        val overflowingValue = buildString {
+            append("one")
+            repeat(16) { append(" hundred") }
+        }
+
+        assertRejected("lv2Strength $overflowingValue")
+    }
+
+    @Test
+    fun rejectsRepeatedEnglishUnitSequencesAcrossAPropertyLikeRange() {
+        (2..32).forEach { repetitionCount ->
+            val repeatedHundreds = List(repetitionCount) { "hundred" }.joinToString(" ")
+            assertRejected("minArea one $repeatedHundreds")
+        }
+        (2..16).forEach { repetitionCount ->
+            val repeatedThousands = List(repetitionCount) { "thousand" }.joinToString(" ")
+            assertRejected("actionDuration one $repeatedThousands")
+        }
+    }
+
+    @Test
+    fun keepsValidEnglishHundredAndThousandForms() {
+        assertParsed(
+            transcript = "lv2Strength one hundred twenty",
+            parameter = VoiceParameter.lv2Strength,
+            value = ParameterValue.IntValue(120)
+        )
+        assertParsed(
+            transcript = "actionDuration sixteen hundred",
+            parameter = VoiceParameter.actionDuration,
+            value = ParameterValue.IntValue(1600)
+        )
+        assertParsed(
+            transcript = "rejectDelay one thousand five hundred",
+            parameter = VoiceParameter.rejectDelay,
+            value = ParameterValue.IntValue(1500)
+        )
+    }
+
+    @Test
     fun parsesMixedLvAndChineseStrengthAliasesWithoutQwen() {
         assertParsed(
             transcript = "Lv2强度改为80",
@@ -533,6 +574,16 @@ class DeterministicVoiceParserTest {
     fun doesNotTreatChineseNegationAsBooleanTrue() {
         assertRejected("enhancedInference \u672a\u5f00\u542f")
         assertRejected("lv1AreaMask \u672a\u6253\u5f00")
+    }
+
+    @Test
+    fun rejectsSeparatedEnglishAndChineseNegationBeforeBooleanValues() {
+        listOf(
+            "do not 打开 强化推理",
+            "never 打开 强化推理",
+            "不 打开 强化推理",
+            "不要 关闭 强化推理"
+        ).forEach(::assertRejected)
     }
 
     @Test

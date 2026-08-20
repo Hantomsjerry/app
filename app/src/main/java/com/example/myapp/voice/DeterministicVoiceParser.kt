@@ -21,6 +21,15 @@ object DeterministicVoiceParser {
     private val englishIntegerPattern = Regex(
         """(?i)(?<![a-z])(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)(?:[\s-]+(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand))*(?![a-z])"""
     )
+    private val englishNumberValues = mapOf(
+        "zero" to 0L, "one" to 1L, "two" to 2L, "three" to 3L, "four" to 4L,
+        "five" to 5L, "six" to 6L, "seven" to 7L, "eight" to 8L, "nine" to 9L,
+        "ten" to 10L, "eleven" to 11L, "twelve" to 12L, "thirteen" to 13L,
+        "fourteen" to 14L, "fifteen" to 15L, "sixteen" to 16L, "seventeen" to 17L,
+        "eighteen" to 18L, "nineteen" to 19L, "twenty" to 20L, "thirty" to 30L,
+        "forty" to 40L, "fifty" to 50L, "sixty" to 60L, "seventy" to 70L,
+        "eighty" to 80L, "ninety" to 90L
+    )
     private val decimalPattern = Regex("""(?<![a-z0-9_])[-+]?(?:\d+\.\d*|\.\d+)(?![a-z0-9_])""")
     private val trueBooleanPattern =
         Regex("(?<![A-Za-z0-9_\\u4e00-\\u9fff])(on|true)(?![A-Za-z0-9_\\u4e00-\\u9fff])")
@@ -30,6 +39,10 @@ object DeterministicVoiceParser {
         Regex("(?<![\\p{L}\\p{N}_])(\\u5f00\\u542f|\\u6253\\u5f00)(?![\\p{L}\\p{N}_])")
     private val falseChineseBooleanPattern =
         Regex("(?<![\\p{L}\\p{N}_])\\u5173\\u95ed(?![\\p{L}\\p{N}_])")
+    private val englishNegationPattern = Regex(
+        """(?i)(?<![a-z0-9_])(?:do\s+not|not|never|no|dont|don\s+t|cannot|can\s+t)(?![a-z0-9_])"""
+    )
+    private val chineseNegationPattern = Regex("[不未别勿没无]")
     private val englishMachineMarkerPattern =
         Regex("""machine[^\s]*""")
     private val chineseDeviceMarkerPattern = Regex("\u53f7\u673a")
@@ -54,6 +67,11 @@ object DeterministicVoiceParser {
     fun parse(transcript: String): DirectParseResult {
         val normalized = normalizePunctuation(transcript)
         if (normalized.isBlank()) return DirectParseResult.NeedsModel
+        if (englishNegationPattern.containsMatchIn(normalized) ||
+            chineseNegationPattern.containsMatchIn(normalized)
+        ) {
+            return DirectParseResult.Rejected("negated instructions are not deterministic")
+        }
 
         val matchingText = matchingText(normalized)
         val deviceText = matchingText(normalizeDevicePunctuation(transcript))
@@ -263,29 +281,61 @@ object DeterministicVoiceParser {
     }
 
     private fun parseEnglishInteger(text: String): Int? {
-        val values = mapOf(
-            "zero" to 0, "one" to 1, "two" to 2, "three" to 3, "four" to 4,
-            "five" to 5, "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9,
-            "ten" to 10, "eleven" to 11, "twelve" to 12, "thirteen" to 13,
-            "fourteen" to 14, "fifteen" to 15, "sixteen" to 16, "seventeen" to 17,
-            "eighteen" to 18, "nineteen" to 19, "twenty" to 20, "thirty" to 30,
-            "forty" to 40, "fifty" to 50, "sixty" to 60, "seventy" to 70,
-            "eighty" to 80, "ninety" to 90
-        )
-        var total = 0
-        var current = 0
-        text.lowercase(Locale.ROOT).split(Regex("[\\s-]+"))
-            .forEach { token ->
-                when (token) {
-                    "hundred" -> current = (if (current == 0) 1 else current) * 100
-                    "thousand" -> {
-                        total += (if (current == 0) 1 else current) * 1_000
-                        current = 0
-                    }
-                    else -> current += values[token] ?: return null
-                }
+        val tokens = text.lowercase(Locale.ROOT).split(Regex("[\\s-]+"))
+        val thousandIndexes = tokens.indices.filter { tokens[it] == "thousand" }
+        if (thousandIndexes.size > 1) return null
+
+        val value = try {
+            val thousandIndex = thousandIndexes.singleOrNull()
+            if (thousandIndex == null) {
+                parseEnglishSubThousand(tokens)
+            } else {
+                val high = parseEnglishSubThousand(tokens.subList(0, thousandIndex))
+                    ?: return null
+                val lowTokens = tokens.subList(thousandIndex + 1, tokens.size)
+                val low = if (lowTokens.isEmpty()) 0L else parseEnglishSubThousand(lowTokens)
+                    ?: return null
+                Math.addExact(Math.multiplyExact(high, 1_000L), low)
             }
-        return total + current
+        } catch (_: ArithmeticException) {
+            return null
+        } ?: return null
+        return value.takeIf { it in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong() }?.toInt()
+    }
+
+    private fun parseEnglishSubThousand(tokens: List<String>): Long? {
+        if (tokens.isEmpty()) return null
+        val hundredIndexes = tokens.indices.filter { tokens[it] == "hundred" }
+        if (hundredIndexes.size > 1) return null
+
+        val hundredIndex = hundredIndexes.singleOrNull()
+        if (hundredIndex == null) return parseEnglishBelowHundred(tokens)
+        if (hundredIndex == 0) return null
+
+        val coefficient = parseEnglishBelowHundred(tokens.subList(0, hundredIndex))
+            ?.takeIf { it > 0L }
+            ?: return null
+        val suffixTokens = tokens.subList(hundredIndex + 1, tokens.size)
+        val suffix = if (suffixTokens.isEmpty()) 0L else parseEnglishBelowHundred(suffixTokens)
+            ?: return null
+        return try {
+            Math.addExact(Math.multiplyExact(coefficient, 100L), suffix)
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
+    private fun parseEnglishBelowHundred(tokens: List<String>): Long? {
+        return when (tokens.size) {
+            1 -> englishNumberValues[tokens.single()]
+            2 -> {
+                val tens = englishNumberValues[tokens[0]] ?: return null
+                val units = englishNumberValues[tokens[1]] ?: return null
+                if (tens !in 20L..90L || tens % 10L != 0L || units !in 1L..9L) return null
+                Math.addExact(tens, units)
+            }
+            else -> null
+        }
     }
 
     private fun parseBoolean(matchingText: String, parameter: VoiceParameter): DetectedValue {

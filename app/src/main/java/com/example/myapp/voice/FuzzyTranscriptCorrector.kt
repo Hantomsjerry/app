@@ -34,6 +34,19 @@ class FuzzyTranscriptCorrector(
     private val dictionary: List<CorrectionLexeme>,
     private val pinyinEncoder: PinyinEncoder
 ) {
+    private val preparedLexemes by lazy { dictionary.map(::prepareLexeme) }
+    private val candidateLengthBounds by lazy {
+        val aliasLengths = preparedLexemes.flatMap { lexeme ->
+            lexeme.aliases.map { it.normalized.length }
+        }
+        if (aliasLengths.isEmpty()) {
+            null
+        } else {
+            maxOf(1, aliasLengths.min() - MAX_LENGTH_DELTA)..
+                (aliasLengths.max() + MAX_LENGTH_DELTA)
+        }
+    }
+
     fun correct(rawText: String): CorrectionResult {
         val formattedText = SpeechTranscriptNormalizer.normalizeFormatting(rawText)
         val candidatesByStart = generateCandidates(formattedText).groupBy { it.replacement.start }
@@ -60,18 +73,21 @@ class FuzzyTranscriptCorrector(
     private fun generateCandidates(text: String): List<Candidate> {
         if (text.isEmpty()) return emptyList()
 
-        val preparedLexemes = dictionary.map(::prepareLexeme)
+        val lengthBounds = candidateLengthBounds ?: return emptyList()
         val candidates = mutableListOf<Candidate>()
         for (start in text.indices) {
+            if (!text[start].isLetterOrDigit()) continue
             for (endExclusive in start + 1..text.length) {
                 val source = text.substring(start, endExclusive)
+                val normalizedSource = normalizeForMatching(source)
+                if (normalizedSource.length > lengthBounds.last) break
+                if (normalizedSource.length < lengthBounds.first) continue
                 if (!hasMatchableEdges(source) ||
                     !hasSafeAsciiBoundaries(text, start, endExclusive) ||
                     !hasSafeRepetitionBoundaries(text, start, endExclusive)
                 ) {
                     continue
                 }
-                val normalizedSource = normalizeForMatching(source)
                 if (normalizedSource.isEmpty()) continue
                 if (preparedLexemes.any { source == it.preferredReplacement }) continue
                 if (preparedLexemes.any { lexeme ->
@@ -83,8 +99,25 @@ class FuzzyTranscriptCorrector(
                     continue
                 }
 
+                val spanAnalysis by lazy(LazyThreadSafetyMode.NONE) {
+                    analyzeSpan(source, normalizedSource)
+                }
                 val spanCandidates = preparedLexemes.mapNotNull { lexeme ->
-                    scoreSpan(text, start, endExclusive, source, normalizedSource, lexeme)
+                    if (lexeme.aliases.none { alias ->
+                            abs(alias.normalized.length - normalizedSource.length) <= MAX_LENGTH_DELTA
+                        }
+                    ) {
+                        return@mapNotNull null
+                    }
+                    scoreSpan(
+                        text = text,
+                        start = start,
+                        endExclusive = endExclusive,
+                        source = source,
+                        normalizedSource = normalizedSource,
+                        lexeme = lexeme,
+                        spanAnalysis = { spanAnalysis }
+                    )
                 }.sortedWith(
                     compareByDescending<ScoredReplacement> { it.preciseScore }
                         .thenBy { it.canonical }
@@ -120,7 +153,8 @@ class FuzzyTranscriptCorrector(
         endExclusive: Int,
         source: String,
         normalizedSource: String,
-        lexeme: PreparedLexeme
+        lexeme: PreparedLexeme,
+        spanAnalysis: () -> SpanAnalysis
     ): ScoredReplacement? {
         if (source == lexeme.preferredReplacement) return null
         if (normalizedSource in lexeme.normalizedAliases) {
@@ -136,13 +170,7 @@ class FuzzyTranscriptCorrector(
             lexeme.category,
             text.substring(max(0, start - CONTEXT_RADIUS), minOf(text.length, endExclusive + CONTEXT_RADIUS))
         )
-        val matchInputs = buildList {
-            add(MatchInput(normalizedSource, pinyinEncoder.encode(source), repetition = false))
-            repetitionReductions(normalizedSource).forEach { reduced ->
-                add(MatchInput(reduced, pinyinEncoder.encode(reduced), repetition = true))
-            }
-        }
-        val bestAlias = matchInputs.flatMap { input ->
+        val bestAlias = spanAnalysis().matchInputs.flatMap { input ->
             lexeme.aliases.mapNotNull { alias ->
                 if (hasUnsafeEmbeddedAlias(input.normalized, alias)) {
                     return@mapNotNull null
@@ -184,6 +212,16 @@ class FuzzyTranscriptCorrector(
             matchedAlias = bestAlias.matchedAlias
         )
     }
+
+    private fun analyzeSpan(source: String, normalizedSource: String): SpanAnalysis =
+        SpanAnalysis(
+            matchInputs = buildList {
+                add(MatchInput(normalizedSource, pinyinEncoder.encode(source), repetition = false))
+                repetitionReductions(normalizedSource).forEach { reduced ->
+                    add(MatchInput(reduced, pinyinEncoder.encode(reduced), repetition = true))
+                }
+            }
+        )
 
     private fun selectGlobally(
         textLength: Int,
@@ -377,6 +415,8 @@ class FuzzyTranscriptCorrector(
         val pinyin: String,
         val repetition: Boolean
     )
+
+    private data class SpanAnalysis(val matchInputs: List<MatchInput>)
 
     private data class AliasScore(
         val preciseScore: Double,

@@ -25,6 +25,42 @@ object SpeechCorrectionDictionary {
         CorrectionLexeme("Lv2", setOf("Lv2", "lv2", "l v 2", "lv二", "二级", "绿二", "吕二"), CorrectionCategory.LEVEL),
         CorrectionLexeme("Lv3", setOf("Lv3", "lv3", "l v 3", "lv三", "三级"), CorrectionCategory.LEVEL),
         CorrectionLexeme(
+            "SET_PARAMETER",
+            setOf(
+                "SET_PARAMETER", "set", "set to", "change", "change to", "adjust", "modify",
+                "设置", "设为", "设成", "调整", "调节", "修改", "更改", "改为", "改成"
+            ),
+            CorrectionCategory.ACTION,
+            preferredReplacement = "设置"
+        ),
+        CorrectionLexeme(
+            "true",
+            setOf(
+                "true", "on", "open", "enable", "enabled", "turn on", "switch on",
+                "开启", "打开", "启用", "开起"
+            ),
+            CorrectionCategory.BOOLEAN,
+            preferredReplacement = "打开"
+        ),
+        CorrectionLexeme(
+            "false",
+            setOf(
+                "false", "off", "close", "closed", "disable", "disabled", "turn off", "switch off",
+                "关闭", "关掉", "禁用", "关比"
+            ),
+            CorrectionCategory.BOOLEAN,
+            preferredReplacement = "关闭"
+        ),
+        CorrectionLexeme(
+            "400mmBase.engine",
+            setOf(
+                "400mmBase.engine", "400 mm base engine", "400mm base engine",
+                "400 millimeter base engine", "400 mm base dot engine", "四百毫米基础引擎"
+            ),
+            CorrectionCategory.TEMPLATE,
+            preferredReplacement = "400mmBase.engine"
+        ),
+        CorrectionLexeme(
             "lv1Sensitivity",
             setOf(
                 "lv1Sensitivity", "Lv1 sensitivity", "level 1 sensitivity",

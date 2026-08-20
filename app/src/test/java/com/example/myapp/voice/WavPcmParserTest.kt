@@ -9,6 +9,20 @@ import org.junit.Test
 
 class WavPcmParserTest {
     @Test
+    fun rejectsEmptyInputWithValidationException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WavPcmParser.parse16kMonoPcm(byteArrayOf())
+        }
+    }
+
+    @Test
+    fun rejectsElevenByteHeaderWithValidationException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WavPcmParser.parse16kMonoPcm(ByteArray(11))
+        }
+    }
+
+    @Test
     fun parsesRiffSizeBeforeWaveAndFmt18Chunk() {
         val pcm = shortArrayOf(7, -9)
 

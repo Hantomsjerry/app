@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 
 object WavPcmParser {
     fun parse16kMonoPcm(bytes: ByteArray): ShortArray {
+        require(bytes.size >= 12) { "WAV fixture is missing the RIFF/WAVE header" }
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         require(buffer.readFourCc() == "RIFF") { "WAV fixture is not RIFF" }
         val riffSize = buffer.int

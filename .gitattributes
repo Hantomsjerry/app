@@ -1,3 +1,4 @@
 *.gguf filter=lfs diff=lfs merge=lfs -text
 *.onnx filter=lfs diff=lfs merge=lfs -text
 *.aar filter=lfs diff=lfs merge=lfs -text
+app/src/main/assets/models/**/tokens.txt -text

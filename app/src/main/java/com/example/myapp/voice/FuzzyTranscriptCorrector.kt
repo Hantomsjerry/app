@@ -43,7 +43,7 @@ class FuzzyTranscriptCorrector(
             null
         } else {
             maxOf(1, aliasLengths.min() - MAX_LENGTH_DELTA)..
-                (aliasLengths.max() + MAX_LENGTH_DELTA)
+                (aliasLengths.max() * MAX_REPETITION_COPIES + MAX_LENGTH_DELTA)
         }
     }
 
@@ -99,12 +99,12 @@ class FuzzyTranscriptCorrector(
                     continue
                 }
 
-                val spanAnalysis by lazy(LazyThreadSafetyMode.NONE) {
-                    analyzeSpan(source, normalizedSource)
-                }
+                val spanAnalysis = analyzeSpan(source, normalizedSource)
                 val spanCandidates = preparedLexemes.mapNotNull { lexeme ->
                     if (lexeme.aliases.none { alias ->
-                            abs(alias.normalized.length - normalizedSource.length) <= MAX_LENGTH_DELTA
+                            spanAnalysis.matchInputs.any { input ->
+                                abs(alias.normalized.length - input.normalized.length) <= MAX_LENGTH_DELTA
+                            }
                         }
                     ) {
                         return@mapNotNull null
@@ -353,7 +353,9 @@ class FuzzyTranscriptCorrector(
     private fun hasSafeAsciiBoundaries(text: String, start: Int, endExclusive: Int): Boolean {
         val first = text[start]
         val last = text[endExclusive - 1]
-        val unsafePrefix = first.isAsciiWordCharacter() && text.getOrNull(start - 1).isAsciiWordCharacter()
+        val prefix = text.getOrNull(start - 1)
+        val unsafePrefix = first.isAsciiWordCharacter() &&
+            (prefix.isAsciiWordCharacter() || prefix == '\'' || prefix == '\u2019')
         val unsafeSuffix = last.isAsciiWordCharacter() && text.getOrNull(endExclusive).isAsciiWordCharacter()
         return !unsafePrefix && !unsafeSuffix
     }
@@ -460,6 +462,7 @@ class FuzzyTranscriptCorrector(
         const val MIN_SCORE = 0.82
         const val AMBIGUITY_DELTA = 0.08
         const val MAX_LENGTH_DELTA = 2
+        const val MAX_REPETITION_COPIES = 2
         const val CONTEXT_RADIUS = 12
         const val CHINESE_NUMBERS = "零〇一二两三四五六七八九十百千万"
         const val CJK_SEMANTIC_BOUNDARIES = "不别勿未没无调设改变开关启停禁到为成的并和再请把将给对在值"

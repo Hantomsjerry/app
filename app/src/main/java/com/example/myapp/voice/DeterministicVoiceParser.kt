@@ -40,7 +40,7 @@ object DeterministicVoiceParser {
     private val falseChineseBooleanPattern =
         Regex("(?<![\\p{L}\\p{N}_])\\u5173\\u95ed(?![\\p{L}\\p{N}_])")
     private val englishNegationPattern = Regex(
-        """(?i)(?<![a-z0-9_])(?:do\s+not|not|never|no|dont|don\s+t|cannot|can\s+t)(?![a-z0-9_])"""
+        """(?i)(?<![a-z0-9_])(?:do\s+not|not|never|no|dont|cannot|(?:don|doesn|didn|can|couldn|wouldn|shouldn|won|isn|aren|wasn|weren|hasn|haven|hadn|mustn|needn)\s+t)(?![a-z0-9_])"""
     )
     private val chineseNegationPattern = Regex("[不未别勿没无]")
     private val englishMachineMarkerPattern =

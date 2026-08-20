@@ -587,6 +587,16 @@ class DeterministicVoiceParserTest {
     }
 
     @Test
+    fun rejectsContractedEnglishNegationBeforeBooleanValues() {
+        listOf(
+            "won't 关闭 强化推理",
+            "shouldn't 打开 强化推理",
+            "couldn’t 关闭 强化推理",
+            "isn't 打开 强化推理"
+        ).forEach(::assertRejected)
+    }
+
+    @Test
     fun rejectsConflictingBooleanTokens() {
         assertRejected("enhancedInference on off")
         assertRejected("lv1AreaMask \u5f00\u542f \u5173\u95ed")

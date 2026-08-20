@@ -115,6 +115,15 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
+    fun repairsAWholeRepeatedParameterAliasInsideTheBoundedWindow() {
+        val result = corrector.correct("剔除延时剔除延时")
+
+        assertEquals("剔除延时", result.correctedText)
+        assertEquals("剔除延时剔除延时", result.replacements.single().source)
+        assertEquals(CorrectionReason.REPETITION, result.replacements.single().reason)
+    }
+
+    @Test
     fun repetitionUsesTheWeightedFormulaInsteadOfPerfectScore() {
         val result = corrector.correct("强化推理推理")
 
@@ -177,6 +186,22 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
+    fun correctedBooleanCommandsPreserveEnglishContractionNegation() {
+        listOf(
+            "won't turn off enhanced inference",
+            "shouldn't turn on enhanced inference"
+        ).forEach { raw ->
+            val result = corrector.correct(raw)
+
+            assertTrue(result.correctedText, result.replacements.isNotEmpty())
+            assertTrue(
+                result.correctedText,
+                DeterministicVoiceParser.parse(result.correctedText) is DirectParseResult.Rejected
+            )
+        }
+    }
+
+    @Test
     fun correctsApprovedTemplateAsrSurfaceBeforeParsing() {
         val result = corrector.correct("set template to 400 mm base engine")
 
@@ -234,7 +259,7 @@ class FuzzyTranscriptCorrectorTest {
             }
         }
         val minimumCandidateLength = maxOf(1, normalizedLengths.min() - 2)
-        val maximumCandidateLength = normalizedLengths.max() + 2
+        val maximumCandidateLength = normalizedLengths.max() * 2 + 2
         val candidateSpanBound = transcript.indices.sumOf { start ->
             val longest = minOf(maximumCandidateLength, transcript.length - start)
             if (longest < minimumCandidateLength) 0 else longest - minimumCandidateLength + 1

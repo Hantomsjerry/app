@@ -71,7 +71,10 @@ object SpeechCorrectionDictionary {
         ),
         CorrectionLexeme(
             "lv1Strength",
-            setOf("lv1Strength", "Lv1 strength", "level 1 strength", "Lv1强度", "Lv1 强度", "一级强度"),
+            setOf(
+                "lv1Strength", "Lv1 strength", "level 1 strength", "Lv1强度", "Lv1 强度",
+                "一级强度", "LVE强度"
+            ),
             CorrectionCategory.PARAMETER,
             preferredReplacement = "Lv1强度"
         ),

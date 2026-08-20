@@ -294,6 +294,16 @@ class FuzzyTranscriptCorrectorTest {
     }
 
     @Test
+    fun correctsObservedLveStrengthAsUnambiguousLv1Strength() {
+        val result = corrector.correct("把LVE强度调到80。")
+
+        assertEquals("把Lv1强度调到80。", result.correctedText)
+        assertFalse(result.ambiguous)
+        assertEquals("LVE强度", result.replacements.single().source)
+        assertEquals(CorrectionReason.EXACT_ALIAS, result.replacements.single().reason)
+    }
+
+    @Test
     fun correctionCountDoesNotCauseRejection() {
         val result = corrector.correct("一号几绿二剔除岩石增强推断动作持序")
 

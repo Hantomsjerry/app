@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class WavPcmParserTest {
@@ -12,6 +13,18 @@ class WavPcmParserTest {
         val pcm = shortArrayOf(7, -9)
 
         assertArrayEquals(pcm, WavPcmParser.parse16kMonoPcm(wav(pcm, fmtSize = 18)))
+    }
+
+    @Test fun rejectsDataWithoutFmtChunk() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WavPcmParser.parse16kMonoPcm(wav(shortArrayOf(1), 18).also { it[12] = 'J'.code.toByte() })
+        }
+    }
+
+    @Test fun rejectsChunksOutsideDeclaredRiffPayload() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WavPcmParser.parse16kMonoPcm(wav(shortArrayOf(1), 18).also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putInt(4, 4) })
+        }
     }
 
     private fun wav(pcm: ShortArray, fmtSize: Int): ByteArray {

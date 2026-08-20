@@ -20,11 +20,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SenseVoiceAccuracyInstrumentedTest {
     @Test
-    fun decodesRepresentativeChineseCommandOnce() = decodeFixture("asr/zh_lv2_strength80.wav")
+    fun decodesRepresentativeChineseCommandOnce() = decodeFixture("asr/zh_reject_delay700.wav")
 
     @Test
     fun decodesRepresentativeMixedChineseEnglishCommandOnce() =
-        decodeFixture("asr/en_machine2_sensitivity32.wav")
+        decodeFixture("asr/zh_lv2_strength80.wav")
 
     private fun decodeFixture(assetPath: String) = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -40,7 +40,7 @@ class SenseVoiceAccuracyInstrumentedTest {
             engine.acceptSamples(load16kMonoPcm(assetPath))
 
             val startedAt = SystemClock.elapsedRealtime()
-            val finalResults = listOf(corrector.correct(engine.finishSession()))
+            val finalResults = mutableListOf(corrector.correct(engine.finishSession()))
             val elapsedMs = SystemClock.elapsedRealtime() - startedAt
             val result = finalResults.single()
 
@@ -52,6 +52,8 @@ class SenseVoiceAccuracyInstrumentedTest {
             assertTrue(result.rawText.isNotBlank())
             assertTrue(result.correctedText.isNotBlank())
             assertFalse(result.ambiguous)
+            assertEquals(1, finalResults.size)
+            assertThrows(IllegalStateException::class.java) { runBlocking { engine.finishSession() } }
             assertEquals(1, finalResults.size)
             assertTrue(partialResults.isEmpty())
             assertTrue(elapsedMs >= 0)

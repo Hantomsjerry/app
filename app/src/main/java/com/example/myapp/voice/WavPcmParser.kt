@@ -10,15 +10,18 @@ object WavPcmParser {
         require(buffer.readFourCc() == "RIFF") { "WAV fixture is not RIFF" }
         val riffSize = buffer.int
         require(riffSize >= 4 && riffSize <= buffer.remaining()) { "Invalid RIFF payload size" }
+        val riffEnd = buffer.position() + riffSize
         require(buffer.readFourCc() == "WAVE") { "RIFF fixture is not WAVE" }
 
         var pcm: ByteArray? = null
-        while (buffer.remaining() >= 8) {
+        var hasFmtChunk = false
+        while (buffer.position() + 8 <= riffEnd) {
             val chunkId = buffer.readFourCc()
             val chunkSize = buffer.int
-            require(chunkSize >= 0 && chunkSize <= buffer.remaining()) { "Invalid $chunkId chunk length" }
+            require(chunkSize >= 0 && buffer.position() + chunkSize <= riffEnd) { "Invalid $chunkId chunk length" }
             val chunkEnd = buffer.position() + chunkSize
             if (chunkId == "fmt ") {
+                hasFmtChunk = true
                 require(chunkSize >= 16) { "WAV fmt chunk is truncated" }
                 require(buffer.short.toInt() == 1) { "WAV is not PCM" }
                 require(buffer.short.toInt() == 1) { "WAV is not mono" }
@@ -27,13 +30,16 @@ object WavPcmParser {
                 buffer.short
                 require(buffer.short.toInt() == 16) { "WAV is not 16-bit PCM" }
             } else if (chunkId == "data") {
+                require(hasFmtChunk) { "WAV data precedes fmt chunk" }
                 pcm = ByteArray(chunkSize).also(buffer::get)
             }
             val nextChunk = chunkEnd + chunkSize % 2
-            require(nextChunk <= buffer.limit()) { "WAV chunk padding is truncated" }
+            require(nextChunk <= riffEnd) { "WAV chunk padding is truncated" }
             buffer.position(nextChunk)
         }
 
+        require(hasFmtChunk) { "WAV fixture has no fmt chunk" }
+        require(buffer.position() == riffEnd) { "WAV RIFF payload has trailing bytes" }
         val pcmBytes = requireNotNull(pcm) { "WAV fixture has no data chunk" }
         require(pcmBytes.size % 2 == 0) { "WAV PCM data must contain 16-bit samples" }
         return ShortArray(pcmBytes.size / 2) { index ->

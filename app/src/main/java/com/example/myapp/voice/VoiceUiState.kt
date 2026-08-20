@@ -1,5 +1,10 @@
 package com.example.myapp.voice
 
+data class VoiceTranscript(
+    val raw: String,
+    val corrected: String
+)
+
 /** 语音卡片从录音到服务端确认的完整、互斥 UI 状态。 */
 sealed interface VoiceUiState {
     data object Idle : VoiceUiState
@@ -15,36 +20,37 @@ sealed interface VoiceUiState {
 
     data class Parsing(
         val generation: Long,
-        val transcript: String
+        val transcript: VoiceTranscript
     ) : VoiceUiState
 
     data class PreparingModel(
         val generation: Long,
-        val transcript: String
+        val transcript: VoiceTranscript
     ) : VoiceUiState
 
     data class Ready(
         val generation: Long,
-        val transcript: String,
+        val transcript: VoiceTranscript,
         val command: SetParameterCommand,
         val retryError: String? = null
     ) : VoiceUiState
 
     data class Sending(
         val generation: Long,
-        val transcript: String,
+        val transcript: VoiceTranscript,
         val command: SetParameterCommand
     ) : VoiceUiState
 
     data class Success(
         val generation: Long,
-        val transcript: String,
+        val transcript: VoiceTranscript,
         val command: SetParameterCommand
     ) : VoiceUiState
 
     data class Error(
         val generation: Long,
-        val message: String
+        val message: String,
+        val transcript: VoiceTranscript? = null
     ) : VoiceUiState
 }
 
@@ -56,7 +62,11 @@ sealed interface VoiceEvent {
     data class RecordingStarted(override val generation: Long) : VoiceEvent
     data class PartialText(override val generation: Long, val transcript: String) : VoiceEvent
     data class RecordingStopped(override val generation: Long) : VoiceEvent
-    data class FinalText(override val generation: Long, val transcript: String) : VoiceEvent
+    data class FinalResult(
+        override val generation: Long,
+        val transcript: VoiceTranscript,
+        val ambiguous: Boolean
+    ) : VoiceEvent
     data class ModelPreparationStarted(override val generation: Long) : VoiceEvent
     data class ParsedCommand(override val generation: Long, val command: SetParameterCommand) : VoiceEvent
     data class RecognitionFailed(override val generation: Long, val message: String) : VoiceEvent
@@ -94,20 +104,24 @@ fun reduceVoiceState(state: VoiceUiState, event: VoiceEvent): VoiceUiState {
             else -> state
         }
         is VoiceUiState.Transcribing -> when (event) {
-            is VoiceEvent.FinalText -> VoiceUiState.Parsing(event.generation, event.transcript)
+            is VoiceEvent.FinalResult -> if (event.ambiguous) {
+                VoiceUiState.Error(event.generation, "指令存在歧义", event.transcript)
+            } else {
+                VoiceUiState.Parsing(event.generation, event.transcript)
+            }
             is VoiceEvent.RecognitionFailed -> VoiceUiState.Error(event.generation, event.message)
             else -> state
         }
         is VoiceUiState.Parsing -> when (event) {
             is VoiceEvent.ModelPreparationStarted -> VoiceUiState.PreparingModel(event.generation, state.transcript)
             is VoiceEvent.ParsedCommand -> VoiceUiState.Ready(event.generation, state.transcript, event.command)
-            is VoiceEvent.ParseFailed -> VoiceUiState.Error(event.generation, event.message)
+            is VoiceEvent.ParseFailed -> VoiceUiState.Error(event.generation, event.message, state.transcript)
             else -> state
         }
         is VoiceUiState.PreparingModel -> when (event) {
             is VoiceEvent.ParsedCommand -> VoiceUiState.Ready(event.generation, state.transcript, event.command)
-            is VoiceEvent.ModelFailed -> VoiceUiState.Error(event.generation, event.message)
-            is VoiceEvent.ParseFailed -> VoiceUiState.Error(event.generation, event.message)
+            is VoiceEvent.ModelFailed -> VoiceUiState.Error(event.generation, event.message, state.transcript)
+            is VoiceEvent.ParseFailed -> VoiceUiState.Error(event.generation, event.message, state.transcript)
             else -> state
         }
         is VoiceUiState.Ready -> when (event) {

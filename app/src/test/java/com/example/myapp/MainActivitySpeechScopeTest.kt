@@ -113,7 +113,7 @@ class MainActivitySpeechScopeTest {
             callbackName = "onFinalResult",
             nextCallbackName = "onError",
             trackerCall = "voiceGenerationTracker.resolve",
-            eventName = "VoiceEvent.FinalText"
+            eventName = "VoiceEvent.FinalResult"
         )
         assertTrackerBeforeEvent(
             callbacks = callbacks,
@@ -132,17 +132,15 @@ class MainActivitySpeechScopeTest {
             "onError = {"
         )
         val ambiguityCheck = requiredIndex(callback, "if (result.correction.ambiguous)")
-        val recognitionFailure = requiredIndex(callback, "VoiceEvent.RecognitionFailed")
-        val finalText = requiredIndex(callback, "VoiceEvent.FinalText")
+        val finalResult = requiredIndex(callback, "VoiceEvent.FinalResult")
         val modelPreparation = requiredIndex(callback, "VoiceEvent.ModelPreparationStarted")
         val parser = requiredIndex(callback, "voiceIntentParser.parse")
-        val gate = callback.substring(ambiguityCheck, finalText)
+        val gate = callback.substring(ambiguityCheck, modelPreparation)
 
-        assertTrue(ambiguityCheck < recognitionFailure)
-        assertTrue(recognitionFailure < finalText)
-        assertTrue(finalText < modelPreparation)
+        assertTrue(ambiguityCheck < finalResult)
+        assertTrue(finalResult < modelPreparation)
         assertTrue(modelPreparation < parser)
-        assertTrue(gate.contains("\\u6307\\u4ee4\\u5b58\\u5728\\u6b67\\u4e49"))
+        assertTrue(gate.contains("ambiguous = true"))
         assertTrue(gate.contains("return@LocalSpeechController"))
     }
 

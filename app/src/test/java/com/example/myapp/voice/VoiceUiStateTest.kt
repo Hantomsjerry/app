@@ -9,7 +9,7 @@ import org.junit.Test
 class VoiceUiStateTest {
     @Test
     fun newSessionWaitsForSpeechModel() {
-        val previous = VoiceUiState.Ready(4, "old command", command(), "send failed")
+        val previous = VoiceUiState.Ready(4, transcript(), command(), "send failed")
 
         assertEquals(
             VoiceUiState.PreparingSpeechModel(5),
@@ -45,8 +45,8 @@ class VoiceUiStateTest {
         listOf<VoiceUiState>(
             VoiceUiState.PreparingSpeechModel(5),
             VoiceUiState.Transcribing(5),
-            VoiceUiState.Parsing(5, "current"),
-            VoiceUiState.Ready(5, "current", command())
+            VoiceUiState.Parsing(5, transcript()),
+            VoiceUiState.Ready(5, transcript(), command())
         ).forEach { state ->
             assertSame(state, reduceVoiceState(state, partial))
         }
@@ -64,15 +64,34 @@ class VoiceUiStateTest {
     }
 
     @Test
-    fun finalTextMovesOnlyTranscribingToParsing() {
-        val finalText = VoiceEvent.FinalText(3, "set level one strength to 12")
+    fun finalResultMovesOnlyTranscribingToParsingAndKeepsBothTexts() {
+        val finalResult = VoiceEvent.FinalResult(3, transcript(), ambiguous = false)
         val recording = VoiceUiState.Recording(3)
 
-        assertSame(recording, reduceVoiceState(recording, finalText))
+        assertSame(recording, reduceVoiceState(recording, finalResult))
         assertEquals(
-            VoiceUiState.Parsing(3, "set level one strength to 12"),
-            reduceVoiceState(VoiceUiState.Transcribing(3), finalText)
+            VoiceUiState.Parsing(3, transcript()),
+            reduceVoiceState(VoiceUiState.Transcribing(3), finalResult)
         )
+    }
+
+    @Test
+    fun ambiguousCorrectionBecomesNonApplicableErrorWithTranscript() {
+        assertEquals(
+            VoiceUiState.Error(3, "指令存在歧义", transcript()),
+            reduceVoiceState(
+                VoiceUiState.Transcribing(3),
+                VoiceEvent.FinalResult(3, transcript(), ambiguous = true)
+            )
+        )
+    }
+
+    @Test
+    fun ambiguousErrorRejectsParseStartAndParsedCommand() {
+        val error = VoiceUiState.Error(3, "指令存在歧义", transcript())
+
+        assertSame(error, reduceVoiceState(error, VoiceEvent.ModelPreparationStarted(3)))
+        assertSame(error, reduceVoiceState(error, VoiceEvent.ParsedCommand(3, command())))
     }
 
     @Test
@@ -88,9 +107,9 @@ class VoiceUiStateTest {
     @Test
     fun modelPreparationKeepsTranscript() {
         assertEquals(
-            VoiceUiState.PreparingModel(3, "set level one strength to 12"),
+            VoiceUiState.PreparingModel(3, transcript()),
             reduceVoiceState(
-                VoiceUiState.Parsing(3, "set level one strength to 12"),
+                VoiceUiState.Parsing(3, transcript()),
                 VoiceEvent.ModelPreparationStarted(3)
             )
         )
@@ -101,9 +120,9 @@ class VoiceUiStateTest {
         val command = command()
 
         assertEquals(
-            VoiceUiState.Ready(3, "set level one strength to 12", command),
+            VoiceUiState.Ready(3, transcript(), command),
             reduceVoiceState(
-                VoiceUiState.Parsing(3, "set level one strength to 12"),
+                VoiceUiState.Parsing(3, transcript()),
                 VoiceEvent.ParsedCommand(3, command)
             )
         )
@@ -111,10 +130,10 @@ class VoiceUiStateTest {
 
     @Test
     fun sendStartMovesReadyCandidateToSending() {
-        val ready = VoiceUiState.Ready(3, "set level one strength to 12", command())
+        val ready = VoiceUiState.Ready(3, transcript(), command())
 
         assertEquals(
-            VoiceUiState.Sending(3, "set level one strength to 12", command()),
+            VoiceUiState.Sending(3, transcript(), command()),
             reduceVoiceState(ready, VoiceEvent.SendStarted(3))
         )
     }
@@ -123,12 +142,12 @@ class VoiceUiStateTest {
     fun sendFailureReturnsToReadyWithSameCandidateAndRetryError() {
         val command = command()
         val state = reduceVoiceState(
-            VoiceUiState.Sending(3, "set level one strength to 12", command),
+            VoiceUiState.Sending(3, transcript(), command),
             VoiceEvent.SendFailed(3, "network unavailable")
         )
 
         assertEquals(
-            VoiceUiState.Ready(3, "set level one strength to 12", command, "network unavailable"),
+            VoiceUiState.Ready(3, transcript(), command, "network unavailable"),
             state
         )
     }
@@ -138,9 +157,9 @@ class VoiceUiStateTest {
         val command = command()
 
         assertEquals(
-            VoiceUiState.Success(3, "set level one strength to 12", command),
+            VoiceUiState.Success(3, transcript(), command),
             reduceVoiceState(
-                VoiceUiState.Sending(3, "set level one strength to 12", command),
+                VoiceUiState.Sending(3, transcript(), command),
                 VoiceEvent.SendSucceeded(3)
             )
         )
@@ -174,16 +193,16 @@ class VoiceUiStateTest {
     @Test
     fun parseAndModelErrorsNeverContainCommand() {
         val parseError = reduceVoiceState(
-            VoiceUiState.Parsing(3, "set level one"),
+            VoiceUiState.Parsing(3, transcript()),
             VoiceEvent.ParseFailed(3, "parse failed")
         )
         val modelError = reduceVoiceState(
-            VoiceUiState.PreparingModel(3, "set level one"),
+            VoiceUiState.PreparingModel(3, transcript()),
             VoiceEvent.ModelFailed(3, "model failed")
         )
 
-        assertEquals(VoiceUiState.Error(3, "parse failed"), parseError)
-        assertEquals(VoiceUiState.Error(3, "model failed"), modelError)
+        assertEquals(VoiceUiState.Error(3, "parse failed", transcript()), parseError)
+        assertEquals(VoiceUiState.Error(3, "model failed", transcript()), modelError)
     }
 
     @Test
@@ -191,14 +210,14 @@ class VoiceUiStateTest {
         val states = listOf<VoiceUiState>(
             VoiceUiState.Recording(5),
             VoiceUiState.Transcribing(5),
-            VoiceUiState.Parsing(5, "current"),
-            VoiceUiState.Ready(5, "current", command())
+            VoiceUiState.Parsing(5, transcript()),
+            VoiceUiState.Ready(5, transcript(), command())
         )
         val staleEvents = listOf<VoiceEvent>(
             VoiceEvent.RecordingStopped(4),
             VoiceEvent.RecordingStarted(4),
             VoiceEvent.PartialText(4, "old partial"),
-            VoiceEvent.FinalText(4, "old final"),
+            VoiceEvent.FinalResult(4, transcript(), ambiguous = false),
             VoiceEvent.RecognitionFailed(4, "old recognition failure"),
             VoiceEvent.ModelPreparationStarted(4),
             VoiceEvent.ParsedCommand(4, command()),
@@ -228,8 +247,8 @@ class VoiceUiStateTest {
         listOf<VoiceUiState>(
             VoiceUiState.Idle,
             VoiceUiState.Error(3, "failed"),
-            VoiceUiState.Success(3, "done", command()),
-            VoiceUiState.Ready(3, "ready", command())
+            VoiceUiState.Success(3, transcript(), command()),
+            VoiceUiState.Ready(3, transcript(), command())
         ).forEach { state ->
             assertEquals(VoiceMicrophoneAction.StartRecording, microphoneActionFor(state))
         }
@@ -247,9 +266,9 @@ class VoiceUiStateTest {
     fun microphoneActionIgnoresBusyStates() {
         listOf<VoiceUiState>(
             VoiceUiState.Transcribing(3),
-            VoiceUiState.Parsing(3, "text"),
-            VoiceUiState.PreparingModel(3, "text"),
-            VoiceUiState.Sending(3, "text", command())
+            VoiceUiState.Parsing(3, transcript()),
+            VoiceUiState.PreparingModel(3, transcript()),
+            VoiceUiState.Sending(3, transcript(), command())
         ).forEach { state ->
             assertEquals(VoiceMicrophoneAction.Ignore, microphoneActionFor(state))
         }
@@ -282,5 +301,10 @@ class VoiceUiStateTest {
         device = MachineDevice.machine_1,
         parameter = VoiceParameter.lv1Strength,
         value = ParameterValue.IntValue(12)
+    )
+
+    private fun transcript() = VoiceTranscript(
+        raw = "将绿二强度调到六十",
+        corrected = "将Lv2强度调到60"
     )
 }

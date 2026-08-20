@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -53,7 +54,12 @@ class SenseVoiceAccuracyInstrumentedTest {
             assertTrue(result.correctedText.isNotBlank())
             assertFalse(result.ambiguous)
             assertEquals(1, finalResults.size)
-            assertThrows(IllegalStateException::class.java) { runBlocking { engine.finishSession() } }
+            try {
+                engine.finishSession()
+                fail("A completed session must not deliver a second final result")
+            } catch (_: IllegalStateException) {
+                // The offline engine has already released this session's stream.
+            }
             assertEquals(1, finalResults.size)
             assertTrue(partialResults.isEmpty())
             assertTrue(elapsedMs >= 0)

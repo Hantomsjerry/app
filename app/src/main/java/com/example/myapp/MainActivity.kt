@@ -111,6 +111,7 @@ import com.example.myapp.voice.VoiceGenerationTracker
 import com.example.myapp.voice.VoiceIntentParser
 import com.example.myapp.voice.VoiceMicrophoneAction
 import com.example.myapp.voice.VoiceTranscript
+import com.example.myapp.voice.VoiceTranscriptLines
 import com.example.myapp.voice.VoiceUiState
 import com.example.myapp.voice.microphoneActionFor
 import com.example.myapp.voice.microphoneEnabledFor
@@ -188,7 +189,10 @@ fun DetectionParametersScreen() {
     val speechModelStore = remember(applicationContext) { SenseVoiceModelStore(applicationContext) }
     val speechEngine = remember(speechModelStore) { SenseVoiceSpeechEngine(speechModelStore) }
     val transcriptCorrector = remember {
-        FuzzyTranscriptCorrector(SpeechCorrectionDictionary.lexemes, AndroidIcuPinyinEncoder())
+        FuzzyTranscriptCorrector(
+            dictionary = SpeechCorrectionDictionary.lexemes,
+            pinyinEncoder = AndroidIcuPinyinEncoder()
+        )
     }
     val pcmRecorder = remember { AndroidPcmRecorder() }
 
@@ -294,34 +298,17 @@ fun DetectionParametersScreen() {
             onFinalResult = { result ->
                 val generation = voiceGenerationTracker.resolve(result.generation)
                 if (generation != null) {
-                    if (result.correction.ambiguous) {
-                        dispatchVoiceEvent(
-                            VoiceEvent.FinalResult(
-                                generation,
-                                VoiceTranscript(
-                                    raw = result.correction.rawText,
-                                    corrected = result.correction.correctedText
-                                ),
-                                ambiguous = true
-                            )
-                        )
-                        return@LocalSpeechController
-                    }
-                    val wasTranscribing =
-                        (voiceUiState as? VoiceUiState.Transcribing)?.generation == generation
-                    dispatchVoiceEvent(
-                        VoiceEvent.FinalResult(
-                            generation,
-                            VoiceTranscript(
-                                raw = result.correction.rawText,
-                                corrected = result.correction.correctedText
-                            ),
-                            ambiguous = false
-                        )
+                    val finalResult = VoiceEvent.FinalResult(
+                        generation = generation,
+                        transcript = VoiceTranscript(
+                            raw = result.correction.rawText,
+                            corrected = result.correction.correctedText
+                        ),
+                        ambiguous = result.correction.ambiguous
                     )
-                    if (!wasTranscribing ||
-                        (voiceUiState as? VoiceUiState.Parsing)?.generation != generation
-                    ) {
+                    dispatchVoiceEvent(finalResult)
+                    val parsing = voiceUiState as? VoiceUiState.Parsing
+                    if (parsing?.generation != generation) {
                         return@LocalSpeechController
                     }
                     voiceParseJob?.cancel()
@@ -968,17 +955,17 @@ private fun VoiceTuningCard(
     onMicrophoneClick: () -> Unit,
     onApply: () -> Unit
 ) {
-    val transcript = when (state) {
-        is VoiceUiState.Recording -> state.partialTranscript
-        is VoiceUiState.Parsing -> state.transcript.corrected
-        is VoiceUiState.PreparingModel -> state.transcript.corrected
-        is VoiceUiState.Ready -> state.transcript.corrected
-        is VoiceUiState.Sending -> state.transcript.corrected
-        is VoiceUiState.Success -> state.transcript.corrected
+    val transcript: VoiceTranscript? = when (state) {
+        is VoiceUiState.Parsing -> state.transcript
+        is VoiceUiState.PreparingModel -> state.transcript
+        is VoiceUiState.Ready -> state.transcript
+        is VoiceUiState.Sending -> state.transcript
+        is VoiceUiState.Success -> state.transcript
+        is VoiceUiState.Error -> state.transcript
         VoiceUiState.Idle,
         is VoiceUiState.PreparingSpeechModel,
-        is VoiceUiState.Transcribing,
-        is VoiceUiState.Error -> ""
+        is VoiceUiState.Recording,
+        is VoiceUiState.Transcribing -> null
     }
     val command = when (state) {
         is VoiceUiState.Ready -> state.command
@@ -1030,16 +1017,16 @@ private fun VoiceTuningCard(
                     fontSize = 13.sp
                 )
                 Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = if (transcript.isBlank()) {
-                        "\u201c\u5c06 Lv1 \u5f3a\u5ea6\u8c03\u5230 80\u201d"
-                    } else {
-                        "\u5df2\u8bc6\u522b\uff1a$transcript"
-                    },
-                    color = PrimaryBlue,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                if (transcript == null) {
+                    Text(
+                        text = "\u201c\u5c06 Lv1 \u5f3a\u5ea6\u8c03\u5230 80\u201d",
+                        color = PrimaryBlue,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                } else {
+                    VoiceTranscriptLines(transcript)
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 Column(
                     modifier = Modifier

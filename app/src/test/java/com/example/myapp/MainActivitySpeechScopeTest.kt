@@ -125,23 +125,26 @@ class MainActivitySpeechScopeTest {
     }
 
     @Test
-    fun ambiguousCorrectionStopsBeforeModelPreparationAndParsing() {
+    fun finalResultIsReducedBeforeCorrectedTextIsParsed() {
         val callback = fragmentBetween(
             controllerConstruction(),
             "onFinalResult = {",
             "onError = {"
         )
-        val ambiguityCheck = requiredIndex(callback, "if (result.correction.ambiguous)")
-        val finalResult = requiredIndex(callback, "VoiceEvent.FinalResult")
+        val finalResult = requiredIndex(callback, "val finalResult = VoiceEvent.FinalResult")
+        val dispatch = requiredIndex(callback, "dispatchVoiceEvent(finalResult)")
+        val parsing = requiredIndex(callback, "voiceUiState as? VoiceUiState.Parsing")
         val modelPreparation = requiredIndex(callback, "VoiceEvent.ModelPreparationStarted")
         val parser = requiredIndex(callback, "voiceIntentParser.parse")
-        val gate = callback.substring(ambiguityCheck, modelPreparation)
 
-        assertTrue(ambiguityCheck < finalResult)
-        assertTrue(finalResult < modelPreparation)
+        assertTrue(finalResult < dispatch)
+        assertTrue(dispatch < parsing)
+        assertTrue(parsing < modelPreparation)
         assertTrue(modelPreparation < parser)
-        assertTrue(gate.contains("ambiguous = true"))
-        assertTrue(gate.contains("return@LocalSpeechController"))
+        assertTrue(callback.contains("ambiguous = result.correction.ambiguous"))
+        assertTrue(callback.contains("voiceIntentParser.parse(result.correction.correctedText)"))
+        assertFalse(callback.contains("voiceIntentParser.parse(result.correction.rawText)"))
+        assertFalse(callback.contains("if (result.correction.ambiguous)"))
     }
 
     @Test
